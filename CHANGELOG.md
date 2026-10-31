@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 (security)
+- **Fixed:** decompression bombs with falsified zip header sizes. Entries are now inflated through a hard size cap instead of trusting the headers.
+- **Fixed:** CSS injection in `xd_get_design_system` output. Corner radii, stroke widths, shadows and font sizes must now be real numbers.
+- Hardened: object-key lookups from file data no longer touch the prototype chain; parsed-JSON cache is bounded; layer depth, layer count and contrast-check work are capped; folder scans skip directory links that leave the allowed roots.
+- CI: least-privilege token, actions pinned to commit SHAs. Added Dependabot for npm and Actions.
+
 ## 0.2.0
 - **New:** `xd_get_design_system` (JSON / CSS variables / Tailwind), `xd_audit_design`, `xd_find_layers`, `xd_export_copy`, `xd_get_flow` (with Mermaid diagram), `xd_project_overview`.
 - **New:** `xd_export_artboard`, `xd_export_component`, `xd_list_components`, `xd_get_shared_assets` for rebuilding designs in Figma and other tools.

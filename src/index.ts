@@ -14,12 +14,14 @@ import {
   interactions,
   readJson,
   jsonPath,
+  readEntry,
+  own,
   type XdDoc,
 } from "./xd.js";
 import { designSystem, audit, findLayers, copyDeck, flowMap, projectOverview } from "./insights.js";
 import { exportArtboard, exportComponent, listComponents, sharedAssets, artboardGeometry } from "./export.js";
 
-const server = new McpServer({ name: "adobe-xd-mcp", version: "0.2.0" });
+const server = new McpServer({ name: "adobe-xd-mcp", version: "0.2.1" });
 
 const file = z.string().describe("Absolute path to a .xd file");
 const MAX_OUT = 400_000;
@@ -58,7 +60,7 @@ server.registerTool(
     const geo = includeGeometry ? await artboardGeometry(doc) : {};
     const artboards = [];
     for (const { id, name, path: p } of doc.artboards) {
-      const g = includeGeometry ? geo[(await readJson(doc, p))?.children?.[0]?.artboard?.ref] : undefined;
+      const g = includeGeometry ? own(geo, (await readJson(doc, p))?.children?.[0]?.artboard?.ref) : undefined;
       artboards.push({ id, name, ...(g && { x: g.x, y: g.y, width: g.width, height: g.height }) });
     }
     return text({ name: doc.manifest?.name, artboardCount: artboards.length, artboards });
@@ -156,7 +158,7 @@ server.registerTool(
     const doc = await openXd(file);
     const name = ["preview.png", "thumbnail.png"].find((n) => doc.zip.file(n));
     if (!name) return fail("No preview image in this file.");
-    const data = await doc.zip.file(name)!.async("base64");
+    const data = (await readEntry(doc, name, 20 * 1024 * 1024)).toString("base64");
     return { content: [{ type: "image" as const, data, mimeType: "image/png" }] };
   }),
 );
@@ -174,7 +176,7 @@ server.registerTool(
     const written: string[] = [];
     for (const e of doc.entries) {
       if (!e.startsWith("resources/") || e.endsWith(".agc") || e.endsWith(".json")) continue;
-      const buf = await doc.zip.file(e)!.async("nodebuffer");
+      const buf = await readEntry(doc, e);
       const ext = sniffExt(buf);
       // Fixed prefix + sanitized name: no traversal, no Windows device names (CON, NUL, ...), no ADS (a:b).
       const base = path.basename(e).replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 80);
@@ -193,9 +195,8 @@ async function saveImages(doc: XdDoc, uids: string[], outDir: string) {
   const files: Record<string, string> = {};
   for (const uid of uids) {
     if (!/^[0-9a-f]{16,64}$/i.test(uid)) continue; // only hash-like ids become file names
-    const f = doc.zip.file(`resources/${uid}`);
-    if (!f) continue;
-    const buf = await f.async("nodebuffer");
+    if (!doc.zip.file(`resources/${uid}`)) continue;
+    const buf = await readEntry(doc, `resources/${uid}`);
     const dest = path.join(safeOut, uid + sniffExt(buf));
     try {
       await writeFile(dest, buf, { flag: "wx" });

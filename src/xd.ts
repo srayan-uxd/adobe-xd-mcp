@@ -25,6 +25,7 @@ export interface XdDoc {
   artboards: Artboard[];
   entries: string[];
   agcCache: Map<string, any>;
+  agcSizes?: Map<string, number>;
 }
 
 const cache = new Map<string, { mtime: number; doc: XdDoc }>();
@@ -82,7 +83,43 @@ const MAX_ENTRIES = 20_000;
 const MAX_ENTRY_BYTES = 64 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
 const MAX_CACHED_DOCS = 4;
+const MAX_CACHE_BYTES = 128 * 1024 * 1024; // raw JSON text kept parsed per document
 const MAX_WALK_DEPTH = 256;
+
+/**
+ * Inflate one entry with a hard cap on the *actual* output size. The sizes written in a zip's headers
+ * are attacker-controlled, so they can't be trusted to stop a decompression bomb.
+ */
+export function readEntry(doc: XdDoc, name: string, max = MAX_ENTRY_BYTES): Promise<Buffer> {
+  const f = doc.zip.file(name);
+  if (!f) return Promise.reject(new Error(`No such entry in archive: ${name}`));
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let done = false;
+    // internalStream is public JSZip API but missing from its type definitions
+    const stream = (f as unknown as { internalStream(t: "nodebuffer"): any }).internalStream("nodebuffer");
+    stream.on("data", (chunk: Buffer) => {
+      if (done) return;
+      size += chunk.length;
+      if (size > max) {
+        done = true;
+        stream.pause(); // stop inflating
+        reject(new Error(`Entry too large (over ${Math.round(max / 1048576)} MB): ${name}`));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    stream.on("error", (e: Error) => !done && ((done = true), reject(e)));
+    stream.on("end", () => !done && ((done = true), resolve(Buffer.concat(chunks))));
+    stream.resume();
+  });
+}
+
+/** Own-property lookup: keys come from untrusted files, so never walk the prototype chain. */
+export function own<T = any>(obj: any, key: unknown): T | undefined {
+  return obj && typeof key === "string" && Object.hasOwn(obj, key) ? obj[key] : undefined;
+}
 
 function declaredSize(zip: JSZip, name: string): number {
   return (zip.files[name] as any)?._data?.uncompressedSize ?? 0;
@@ -116,7 +153,7 @@ export async function openXd(input: string): Promise<XdDoc> {
   const mf = zip.file("manifest");
   if (mf) {
     try {
-      manifest = JSON.parse(await mf.async("string"));
+      manifest = JSON.parse((await readEntry({ zip } as XdDoc, "manifest", 4 * 1024 * 1024)).toString("utf8"));
     } catch {
       /* leave empty */
     }
@@ -150,11 +187,20 @@ function findArtboards(doc: XdDoc): Artboard[] {
 
 export async function readJson(doc: XdDoc, entry: string): Promise<any> {
   if (doc.agcCache.has(entry)) return doc.agcCache.get(entry);
-  const f = doc.zip.file(entry);
-  if (!f) throw new Error(`No such entry in archive: ${entry}`);
-  if (declaredSize(doc.zip, entry) > MAX_ENTRY_BYTES) throw new Error("Entry too large.");
-  const json = JSON.parse(await f.async("string"));
+  const raw = await readEntry(doc, entry);
+  const json = JSON.parse(raw.toString("utf8"));
+  // Parsed JSON is much bigger than its text, so keep the per-document cache bounded (oldest out first).
+  const sizes = (doc.agcSizes ??= new Map());
   doc.agcCache.set(entry, json);
+  sizes.set(entry, raw.length);
+  let total = 0;
+  for (const v of sizes.values()) total += v;
+  for (const key of [...doc.agcCache.keys()]) {
+    if (total <= MAX_CACHE_BYTES || doc.agcCache.size <= 1) break;
+    total -= sizes.get(key) ?? 0;
+    doc.agcCache.delete(key);
+    sizes.delete(key);
+  }
   return json;
 }
 

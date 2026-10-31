@@ -1,6 +1,6 @@
 import { readdir, lstat } from "node:fs/promises";
 import path from "node:path";
-import { Artboard, XdDoc, childrenOf, openXd, readJson, assertInsideRoots } from "./xd.js";
+import { Artboard, XdDoc, childrenOf, openXd, own, readJson, assertInsideRoots } from "./xd.js";
 import { artboardGeometry, listComponents, sharedAssets } from "./export.js";
 
 type Json = any;
@@ -39,6 +39,10 @@ const rgbHex = (c: Json): { hex: string; alpha: number } | undefined => {
 };
 const solid = (p: Json) => (p?.type === "solid" ? rgbHex(p.color) : undefined);
 
+const MAX_LAYER_DEPTH = 256;
+const MAX_LAYERS_PER_ARTBOARD = 100_000;
+const MAX_CONTRAST_PAIRS = 50_000_000; // texts x backgrounds; keeps the audit from hanging on hostile files
+
 const layerCache = new WeakMap<XdDoc, Map<string, Layer[]>>();
 
 export async function collectLayers(doc: XdDoc, ab: Artboard): Promise<Layer[]> {
@@ -52,7 +56,9 @@ export async function collectLayers(doc: XdDoc, ab: Artboard): Promise<Layer[]> 
   const out: Layer[] = [];
   let order = 0;
 
-  const visit = (n: Json, origin: { x: number; y: number }, parentId: string | undefined): { x: number; y: number; w: number; h: number } | undefined => {
+  const visit = (n: Json, origin: { x: number; y: number }, parentId: string | undefined, depth = 0): { x: number; y: number; w: number; h: number } | undefined => {
+    if (depth > MAX_LAYER_DEPTH) return undefined;
+    if (out.length >= MAX_LAYERS_PER_ARTBOARD) throw new Error(`Artboard "${ab.name}" has too many layers (over ${MAX_LAYERS_PER_ARTBOARD}).`);
     if (n.visible === false && n.type !== "artboard") return undefined; // hidden layers (and their children) are skipped
     const ux = n.meta?.ux ?? {};
     const t = n.transform ?? {};
@@ -102,7 +108,10 @@ export async function collectLayers(doc: XdDoc, ab: Artboard): Promise<Layer[]> 
       layer.y = origin.y + b * bx + d * by + ty;
       layer.w = Math.abs(bw * a);
       layer.h = Math.abs(bh * d);
-      if (s.type === "rect" && s.r != null) layer.radius = Array.isArray(s.r) ? Math.max(...s.r) : s.r;
+      if (s.type === "rect" && s.r != null) {
+        const r = Array.isArray(s.r) ? Math.max(...s.r.filter(num)) : s.r;
+        if (num(r)) layer.radius = r;
+      }
       return { x: layer.x, y: layer.y, w: layer.w, h: layer.h };
     }
     if (n.type === "text") {
@@ -126,7 +135,7 @@ export async function collectLayers(doc: XdDoc, ab: Artboard): Promise<Layer[]> 
     const childOrigin = { x: origin.x + tx, y: origin.y + ty };
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const k of childrenOf(n)) {
-      const bb = visit(k, childOrigin, n.id);
+      const bb = visit(k, childOrigin, n.id, depth + 1);
       if (!bb) continue;
       x0 = Math.min(x0, bb.x); y0 = Math.min(y0, bb.y); x1 = Math.max(x1, bb.x + bb.w); y1 = Math.max(y1, bb.y + bb.h);
     }
@@ -140,7 +149,7 @@ export async function collectLayers(doc: XdDoc, ab: Artboard): Promise<Layer[]> 
   };
 
   for (const root of agc?.children ?? []) {
-    const g = geoMap[root.artboard?.ref];
+    const g = own(geoMap, root.artboard?.ref);
     // top-level layers hold canvas coordinates: shift so (0,0) is the artboard's corner
     const start = { x: -(g?.x ?? 0), y: -(g?.y ?? 0) };
     const idx = out.length;
@@ -163,6 +172,8 @@ async function allLayers(doc: XdDoc, artboard?: Artboard): Promise<Layer[]> {
 
 /* ---------- design system ---------- */
 
+const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const round2 = (n: number) => Math.round(n * 100) / 100;
 const bump = <K>(m: Map<K, number>, k: K, n = 1) => m.set(k, (m.get(k) ?? 0) + n);
 const ranked = <K>(m: Map<K, number>) => [...m.entries()].sort((a, b) => b[1] - a[1]);
 
@@ -183,10 +194,10 @@ export async function designSystem(doc: XdDoc, format: "json" | "css" | "tailwin
     if (l.type === "artboard") { addColor(l.fill?.hex, "fill"); continue; }
     addColor(l.fill?.hex, l.type === "text" ? "text" : "fill");
     addColor(l.stroke?.hex, "stroke");
-    if (l.font) bump(type, `${l.font.family ?? "?"}|${l.font.style ?? ""}|${l.font.size ?? ""}`);
-    if (l.radius) bump(radii, l.radius);
-    if (l.stroke?.width) bump(strokeWidths, l.stroke.width);
-    for (const s of l.shadows ?? []) bump(shadows, `${s.x}|${s.y}|${s.blur}|${s.hex}|${Math.round(s.alpha * 100) / 100}`);
+    if (l.font) bump(type, `${String(l.font.family ?? "?").replace(/|/g, " ")}|${String(l.font.style ?? "").replace(/|/g, " ")}|${num(l.font.size) ? l.font.size : 0}`);
+    if (num(l.radius) && l.radius > 0) bump(radii, round2(l.radius));
+    if (num(l.stroke?.width) && l.stroke!.width! > 0) bump(strokeWidths, round2(l.stroke!.width!));
+    for (const s of l.shadows ?? []) if (num(s.x) && num(s.y) && num(s.blur) && num(s.alpha)) bump(shadows, `${s.x}|${s.y}|${s.blur}|${s.hex}|${Math.round(s.alpha * 100) / 100}`);
   }
   const shared = await sharedAssets(doc);
   const libNames = new Map<string, string>();
@@ -293,6 +304,7 @@ export async function audit(doc: XdDoc, artboard?: Artboard, opts: { minTapTarge
     const layers = await collectLayers(doc, ab);
     everything.push(...layers);
     const base = layers.find((l) => l.type === "artboard")?.fill?.hex ?? "#ffffff";
+    const textCount = layers.filter((l) => l.type === "text").length;
     const painted = layers.filter((l) => ((l.fill && l.fill.alpha >= 0.95) || l.imageFill) && l.type !== "text" && l.type !== "group" && l.w > 0 && l.h > 0);
     for (const l of layers) {
       const where = { artboard: ab.name, layerId: l.id, layer: l.name };
@@ -300,7 +312,7 @@ export async function audit(doc: XdDoc, artboard?: Artboard, opts: { minTapTarge
         if (l.fontSize && l.fontSize < minFont) push({ check: "small-text", severity: "warning", ...where, message: `Text is ${l.fontSize}px (minimum ${minFont}px).` });
         if (/lorem ipsum|dolor sit amet/i.test(l.text)) push({ check: "placeholder-text", severity: "warning", ...where, message: "Placeholder (lorem ipsum) text." });
         const textColors = l.runFills ?? (l.fill ? [l.fill.hex] : []);
-        if (textColors.length) {
+        if (textColors.length && textCount * painted.length <= MAX_CONTRAST_PAIRS) {
           const cx = l.x + Math.min(l.w, 40) / 2, cy = l.y + l.h / 2;
           let bg: string | undefined = base;
           for (const p of painted) if (p.order < l.order && p.type !== "artboard" && cx >= p.x && cx <= p.x + p.w && cy >= p.y && cy <= p.y + p.h) bg = p.fill ? p.fill.hex : undefined; // last one wins = topmost; a picture means unknown
@@ -451,7 +463,14 @@ export async function projectOverview(dir: string, maxFiles = 60) {
     for (const e of await readdir(d, { withFileTypes: true })) {
       const full = path.join(d, e.name);
       if (e.isSymbolicLink()) continue; // never follow links out of the allowed roots
-      if (e.isDirectory() && e.name !== "node_modules" && !e.name.startsWith(".")) await scan(full, depth + 1);
+      if (e.isDirectory() && e.name !== "node_modules" && !e.name.startsWith(".")) {
+        try {
+          await assertInsideRoots(full); // a junction pointing outside the roots is skipped
+        } catch {
+          continue;
+        }
+        await scan(full, depth + 1);
+      }
       else if (e.isFile() && e.name.toLowerCase().endsWith(".xd") && found.length < maxFiles) found.push(full);
     }
   };

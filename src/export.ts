@@ -1,4 +1,4 @@
-import { Artboard, XdDoc, childrenOf, readJson, rootNodes } from "./xd.js";
+import { Artboard, XdDoc, childrenOf, own, readJson, rootNodes } from "./xd.js";
 
 /**
  * Full-fidelity, tool-friendly export of an XD scene graph.
@@ -265,8 +265,8 @@ function convert(
   if (ux.contentStackType) out.stack = { direction: ux.contentStackType };
   if (ux.contentStackMarginAfter !== undefined) out.stackMarginAfter = ux.contentStackMarginAfter;
   if (ux.scrollingType) out.scrolling = ux.scrollingType;
-  const wired = n.id ? ctx.interactions?.[n.id] : undefined;
-  if (wired?.length) out.interactions = wired.map((i: Json) => interactionOut(i, ctx));
+  const wired = own<Json[]>(ctx.interactions, n.id);
+  if (Array.isArray(wired) && wired.length) out.interactions = wired.map((i: Json) => interactionOut(i, ctx));
   if (ux.clipPathResources) out.mask = convertColors(ux.clipPathResources);
 
   // position / size
@@ -386,12 +386,12 @@ export async function exportArtboard(
 
   const target = opts.nodeId ? findById(root, opts.nodeId) : root;
   if (!target) throw new Error(`No layer with id "${opts.nodeId}" in artboard "${ab.name}".`);
-  const geo = target === root ? geometry[root.artboard?.ref] : undefined;
+  const geo = target === root ? own(geometry, root.artboard?.ref) : undefined;
 
   const limit = opts.maxChars ?? 300_000;
   let depth = Math.min(opts.depth ?? MAX_DEPTH_CAP, MAX_DEPTH_CAP);
   const base = await protoCtx(doc);
-  const rootGeo = geometry[root.artboard?.ref];
+  const rootGeo = own(geometry, root.artboard?.ref);
   const topLevel = target !== root && childrenOf(root).includes(target);
   const offset = topLevel && rootGeo ? { x: rootGeo.x ?? 0, y: rootGeo.y ?? 0 } : undefined;
   for (;;) {

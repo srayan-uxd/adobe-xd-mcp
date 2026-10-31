@@ -76,6 +76,32 @@ for (const p of ["__proto__", "constructor.constructor", "children.constructor"]
 }
 r = await call("xd_read_raw", { file: path.join(dir, "ok.xd"), entry: "../../etc/passwd" });
 check("read_raw cannot read outside archive", r.isError);
+// archive whose headers lie about the size of a 100 MB entry: the real output must be capped
+{
+  const z = new JSZip();
+  z.file("manifest", "{}");
+  z.file("artwork/artboard-1/graphics/graphicContent.agc", Buffer.alloc(100 * 1024 * 1024, 32));
+  const buf = await z.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 9 } });
+  for (let i = 0; i < buf.length - 46; i++) {
+    if (buf.readUInt32LE(i) === 0x02014b50 && buf.readUInt32LE(i + 24) > 1000) buf.writeUInt32LE(1000, i + 24);
+    if (buf.readUInt32LE(i) === 0x04034b50 && buf.readUInt32LE(i + 22) > 1000) buf.writeUInt32LE(1000, i + 22);
+  }
+  writeFileSync(path.join(dir, "lie.xd"), buf);
+  r = await call("xd_read_raw", { file: path.join(dir, "lie.xd"), entry: "artwork/artboard-1/graphics/graphicContent.agc", maxChars: 100 });
+  check("zip with falsified header sizes is capped while inflating", r.isError && /too large/i.test(txt(r)));
+}
+
+// hostile corner radius must not reach the CSS output
+{
+  const hostile = "4px; } body { background:url(//evil/x) } :root { --x:";
+  const z = new JSZip();
+  z.file("manifest", "{}");
+  z.file("artwork/artboard-1/graphics/graphicContent.agc", JSON.stringify({ children: [{ type: "artboard", id: "1", artboard: { ref: "r", children: [{ id: "r", type: "shape", transform: { tx: 0, ty: 0 }, shape: { type: "rect", x: 0, y: 0, width: 5, height: 5, r: hostile }, style: { fill: { type: "solid", color: { mode: "RGB", value: { r: 1, g: 2, b: 3 } } }, stroke: { type: "solid", width: hostile, color: { mode: "RGB", value: { r: 1, g: 2, b: 3 } } } } }] } }] }));
+  writeFileSync(path.join(dir, "css.xd"), await z.generateAsync({ type: "nodebuffer" }));
+  r = await call("xd_get_design_system", { file: path.join(dir, "css.xd"), format: "css" });
+  check("CSS output contains only numeric token values", !r.isError && !/evil|body|url/.test(txt(r)) && /^:root \{/.test(txt(r)));
+}
+
 r = await call("xd_export_artboard", { file: path.join(dir, "ok.xd"), artboard: "artboard-1", assetsDir: outside });
 check("export assetsDir outside root rejected", r.isError && /Access denied/.test(txt(r)));
 await client.close();

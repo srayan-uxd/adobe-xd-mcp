@@ -1,6 +1,6 @@
 {
   "name": "adobe-xd-mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "MCP server that lets AI assistants read Adobe XD (.xd) files: artboards, layers, text, colors, fonts, previews and assets. Read-only and sandboxed to folders you choose.",
   "type": "module",
   "bin": { "adobe-xd-mcp": "dist/index.js" },
