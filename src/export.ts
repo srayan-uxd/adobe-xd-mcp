@@ -168,6 +168,22 @@ function localBox(shape: Json): { x: number; y: number; width: number; height: n
 interface Ctx {
   images: Set<string>;
   maxDepth: number;
+  interactions?: Record<string, Json[]>; // source layer id -> prototype interactions
+  artboardNames?: Map<string, string>; // artboard node id -> name
+}
+
+function interactionOut(i: Json, ctx: Ctx) {
+  const p = i.properties ?? {};
+  return clean({
+    trigger: i.triggerEvent, // tap | hover | time | ...
+    action: i.action, // artboard-transition | state-transition | auto-animate | scroll-transition
+    destinationId: p.destination,
+    destinationName: ctx.artboardNames?.get(p.destination),
+    transition: p.transition,
+    duration: p.duration,
+    easing: p.easing,
+    delay: p.delay,
+  });
 }
 
 function constraintsOf(ux: Json): Json | undefined {
@@ -213,7 +229,18 @@ function clean<T extends Record<string, any>>(o: T): T {
   return o;
 }
 
-function convert(n: Json, ctx: Ctx, depth: number, isArtboardRoot: boolean, geometry?: Json): ExportNode {
+/**
+ * Top-level layers of an artboard store canvas coordinates; `offset` (the artboard's canvas
+ * position) turns them into artboard-relative ones. Deeper layers are already parent-relative.
+ */
+function convert(
+  n: Json,
+  ctx: Ctx,
+  depth: number,
+  isArtboardRoot: boolean,
+  geometry?: Json,
+  offset?: { x: number; y: number },
+): ExportNode {
   const ux = n.meta?.ux ?? {};
   const style = n.style ?? {};
   const m = matrixOf(n);
@@ -234,6 +261,12 @@ function convert(n: Json, ctx: Ctx, depth: number, isArtboardRoot: boolean, geom
   if (ux.markedForExport) out.markedForExport = true;
   if (ux.symbolId) out.component = { symbolId: ux.symbolId, role: ux.isMaster ? "master" : "instance", kind: ux.componentType };
   if (ux.repeatGrid) out.repeatGrid = ux.repeatGrid;
+  // XD "stacks": a group that lays its children out in a row/column. Each child carries the gap after it.
+  if (ux.contentStackType) out.stack = { direction: ux.contentStackType };
+  if (ux.contentStackMarginAfter !== undefined) out.stackMarginAfter = ux.contentStackMarginAfter;
+  if (ux.scrollingType) out.scrolling = ux.scrollingType;
+  const wired = n.id ? ctx.interactions?.[n.id] : undefined;
+  if (wired?.length) out.interactions = wired.map((i: Json) => interactionOut(i, ctx));
   if (ux.clipPathResources) out.mask = convertColors(ux.clipPathResources);
 
   // position / size
@@ -293,13 +326,19 @@ function convert(n: Json, ctx: Ctx, depth: number, isArtboardRoot: boolean, geom
     }
   }
 
+  if (offset && n.type !== "artboard" && typeof out.x === "number" && typeof out.y === "number") {
+    out.x = round(out.x - offset.x);
+    out.y = round(out.y - offset.y);
+  }
+
   if (n.type !== "shape" || n.shape?.type !== "compound") {
     if (kids.length) {
       if (depth >= ctx.maxDepth) {
         out.childCount = kids.length;
         out.truncated = true;
       } else {
-        out.children = kids.map((k: Json) => convert(k, ctx, depth + 1, false));
+        const childOffset = n.type === "artboard" && geometry ? { x: geometry.x ?? 0, y: geometry.y ?? 0 } : undefined;
+        out.children = kids.map((k: Json) => convert(k, ctx, depth + 1, false, undefined, childOffset));
       }
     }
   }
@@ -323,6 +362,14 @@ function findById(n: Json, id: string): Json | undefined {
   return undefined;
 }
 
+/** Prototype wiring (interactions.json), keyed by source layer id, plus artboard names for destinations. */
+export async function protoCtx(doc: XdDoc): Promise<Pick<Ctx, "interactions" | "artboardNames">> {
+  const entry = doc.entries.find((e) => e === "interactions/interactions.json");
+  const interactions = entry ? (await readJson(doc, entry))?.interactions : undefined;
+  const artboardNames = new Map(doc.artboards.map((a) => [a.id.replace(/^artboard-/, ""), a.name]));
+  return { interactions, artboardNames };
+}
+
 export async function artboardGeometry(doc: XdDoc): Promise<Json> {
   return doc.entries.includes(RES_PATH) ? (await readJson(doc, RES_PATH))?.artboards ?? {} : {};
 }
@@ -343,9 +390,13 @@ export async function exportArtboard(
 
   const limit = opts.maxChars ?? 300_000;
   let depth = Math.min(opts.depth ?? MAX_DEPTH_CAP, MAX_DEPTH_CAP);
+  const base = await protoCtx(doc);
+  const rootGeo = geometry[root.artboard?.ref];
+  const topLevel = target !== root && childrenOf(root).includes(target);
+  const offset = topLevel && rootGeo ? { x: rootGeo.x ?? 0, y: rootGeo.y ?? 0 } : undefined;
   for (;;) {
-    const ctx: Ctx = { images: new Set(), maxDepth: depth };
-    const node = convert(target, ctx, 0, target === root, geo);
+    const ctx: Ctx = { images: new Set(), maxDepth: depth, ...base };
+    const node = convert(target, ctx, 0, target === root, geo, offset);
     const size = JSON.stringify(node).length;
     if (size <= limit || depth <= 1) {
       if (size > limit) throw new Error(`Export is ${size} chars even at depth 1; pass a nodeId to export a smaller subtree.`);
@@ -379,6 +430,8 @@ export async function exportComponent(doc: XdDoc, symbolId: string, opts: { dept
   for (;;) {
     const ctx: Ctx = { images: new Set(), maxDepth: depth };
     const node = convert({ ...s, meta: { ux: { ...s.meta?.ux, isMaster: true } } }, ctx, 0, false);
+    delete node.x; // a master has no meaningful canvas position
+    delete node.y;
     if (JSON.stringify(node).length <= limit || depth <= 1) return { node, depthUsed: depth, images: [...ctx.images] } as ExportResult;
     depth--;
   }

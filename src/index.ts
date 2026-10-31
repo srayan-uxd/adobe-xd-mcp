@@ -16,9 +16,10 @@ import {
   jsonPath,
   type XdDoc,
 } from "./xd.js";
+import { designSystem, audit, findLayers, copyDeck, flowMap, projectOverview } from "./insights.js";
 import { exportArtboard, exportComponent, listComponents, sharedAssets, artboardGeometry } from "./export.js";
 
-const server = new McpServer({ name: "adobe-xd-mcp", version: "0.1.0" });
+const server = new McpServer({ name: "adobe-xd-mcp", version: "0.2.0" });
 
 const file = z.string().describe("Absolute path to a .xd file");
 const MAX_OUT = 400_000;
@@ -276,6 +277,119 @@ server.registerTool(
     inputSchema: { file },
   },
   guard(async ({ file }) => text(await sharedAssets(await openXd(file)))),
+);
+
+const optionalArtboard = z.string().optional().describe("Artboard id or name; omit for the whole file");
+const pick = async (doc: XdDoc, a?: string) => (a ? resolveArtboard(doc, a) : undefined);
+
+server.registerTool(
+  "xd_get_design_system",
+  {
+    description:
+      "Extract the design system actually used in the file: color palette (ranked, with fill/text/stroke usage), typography styles and size scale, corner radii, stroke widths and shadows. Output as json, css (custom properties) or tailwind (theme.extend).",
+    inputSchema: { file, format: z.enum(["json", "css", "tailwind"]).default("json") },
+  },
+  guard(async ({ file, format }) => text(await designSystem(await openXd(file), format ?? "json"))),
+);
+
+server.registerTool(
+  "xd_audit_design",
+  {
+    description:
+      "Design QA. Checks text contrast (WCAG, background estimated), tiny text, small tap targets on interactive layers, placeholder text, near-duplicate colors, too many fonts/sizes and default layer names. Returns findings with artboard and layer ids plus per-check totals.",
+    inputSchema: {
+      file,
+      artboard: optionalArtboard,
+      minTapTarget: z.number().min(1).max(200).default(44),
+      minFontSize: z.number().min(1).max(100).default(11),
+      maxPerCheck: z.number().int().min(1).max(500).default(25),
+    },
+  },
+  guard(async ({ file, artboard, minTapTarget, minFontSize, maxPerCheck }) => {
+    const doc = await openXd(file);
+    return text(await audit(doc, await pick(doc, artboard), { minTapTarget, minFontSize, maxPerCheck }));
+  }),
+);
+
+server.registerTool(
+  "xd_find_layers",
+  {
+    description: "Search layers across the file by text content, layer name, type (text, rectangle, ellipse, path, group, ...) or color (#rrggbb, matched with a small tolerance).",
+    inputSchema: {
+      file,
+      text: z.string().optional(),
+      name: z.string().optional(),
+      type: z.string().optional(),
+      color: z.string().optional().describe("#rrggbb"),
+      artboard: optionalArtboard,
+      limit: z.number().int().min(1).max(500).default(50),
+    },
+  },
+  guard(async ({ file, artboard, ...q }) => {
+    const doc = await openXd(file);
+    return text(await findLayers(doc, { ...q, artboard: await pick(doc, artboard) }));
+  }),
+);
+
+server.registerTool(
+  "xd_export_copy",
+  {
+    description: "Export all text content (a copy deck) for translation or review, as json or csv. CSV cells are protected against spreadsheet formula injection.",
+    inputSchema: { file, artboard: optionalArtboard, format: z.enum(["json", "csv"]).default("json") },
+  },
+  guard(async ({ file, artboard, format }) => {
+    const doc = await openXd(file);
+    return text(await copyDeck(doc, await pick(doc, artboard), format ?? "json"));
+  }),
+);
+
+server.registerTool(
+  "xd_get_flow",
+  {
+    description: "Prototype flow map: every interaction (tap/hover/time triggers, transitions, destinations) with source screen and layer, the home screen, and a Mermaid flowchart of screen-to-screen links.",
+    inputSchema: { file },
+  },
+  guard(async ({ file }) => text(await flowMap(await openXd(file)))),
+);
+
+server.registerTool(
+  "xd_project_overview",
+  {
+    description: "Scan a folder (inside the allowed roots) for .xd files and summarize each: name, size, artboard and component counts, whether it has a prototype. Searches up to 3 levels deep, max 60 files.",
+    inputSchema: { folder: z.string().describe("Absolute folder path") },
+  },
+  guard(async ({ folder }) => text(await projectOverview(folder))),
+);
+
+/* Ready-made prompts: shown as one-click starters in clients that support MCP prompts. */
+const promptArgs = { file: z.string().describe("Absolute path to the .xd file"), artboard: z.string().describe("Artboard name") };
+const userPrompt = (t: string) => ({ messages: [{ role: "user" as const, content: { type: "text" as const, text: t } }] });
+
+server.registerPrompt(
+  "xd-to-figma",
+  { title: "Rebuild an XD screen in Figma", description: "Recreate one artboard in Figma (needs the Figma MCP server too).", argsSchema: promptArgs },
+  ({ file, artboard }) =>
+    userPrompt(
+      `Rebuild the artboard "${artboard}" from ${file} in Figma. First call xd_export_artboard (use assetsDir for images), then create frames, shapes, text and images in Figma from that JSON, keeping positions, fills, strokes, shadows, corner radii and fonts. Create components for any xd_list_components items you reuse. Compare against xd_get_preview when done and list what could not be reproduced.`,
+    ),
+);
+
+server.registerPrompt(
+  "xd-to-code",
+  { title: "Turn an XD screen into code", description: "Generate a responsive UI component from one artboard.", argsSchema: { ...promptArgs, stack: z.string().default("React + Tailwind") } },
+  ({ file, artboard, stack }) =>
+    userPrompt(
+      `Build the artboard "${artboard}" from ${file} as ${stack ?? "React + Tailwind"}. Call xd_get_design_system (format tailwind or css) first and use those tokens, then xd_export_artboard for layout, text and images. Use flex layout where the export shows stacks or aligned rows, keep text exact, and note any assumptions.`,
+    ),
+);
+
+server.registerPrompt(
+  "xd-design-review",
+  { title: "Review a design file", description: "Run a design QA pass over a whole file.", argsSchema: { file: z.string().describe("Absolute path to the .xd file") } },
+  ({ file }) =>
+    userPrompt(
+      `Review ${file}. Call xd_audit_design and xd_get_design_system, then summarize the most important accessibility, consistency and system issues with specific screens and layers, ordered by impact. Suggest concrete fixes.`,
+    ),
 );
 
 await server.connect(new StdioServerTransport());

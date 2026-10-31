@@ -22,7 +22,26 @@ It's a small [MCP](https://modelcontextprotocol.io) server. It runs **on your ow
 | `xd_export_artboard` | **Full-fidelity export** of a screen (or one layer) as clean JSON: frames, shapes, vector paths, text, fills, gradients, images, strokes, shadows, rotation, constraints, components. Built for rebuilding designs in other tools. See [XD to Figma](#xd-to-figma-and-other-design-tools) |
 | `xd_list_components` / `xd_export_component` | List and export reusable components (symbols) |
 | `xd_get_shared_assets` | Saved color swatches, library colors and text styles |
+| `xd_get_design_system` | The design system **actually used** in the file: colors (ranked), type styles and size scale, radii, stroke widths, shadows. Output as JSON, **CSS variables** or a **Tailwind theme** |
+| `xd_audit_design` | Design QA: text contrast (WCAG), tiny text, small tap targets, placeholder text, near-duplicate colors, too many fonts, default layer names |
+| `xd_find_layers` | Search the whole file by text, layer name, type or color |
+| `xd_export_copy` | All the text as JSON or CSV (a copy deck for translation or review) |
+| `xd_get_flow` | Prototype flow map: taps, hovers, transitions, destinations, plus a Mermaid diagram |
+| `xd_project_overview` | Summarize every `.xd` file in a folder |
 | `xd_list_entries` / `xd_read_raw` | Advanced: look inside the raw `.xd` archive |
+
+## What can I do with it?
+
+- **Design to code:** "Build the Home screen as React + Tailwind, using the file's real colors and fonts."
+- **XD to Figma:** "Recreate the Login screen in Figma." ([details](#xd-to-figma-and-other-design-tools))
+- **Design system in minutes:** "Give me this file's colors, type scale and shadows as Tailwind config / CSS variables."
+- **Design QA:** "Audit this file for contrast, tiny text and small tap targets."
+- **Copy and translation:** "Export all the text as CSV." Find placeholder text, or every use of a word.
+- **Docs:** "Draw the prototype flow as a diagram and write a screen inventory."
+- **Search:** "Which screens use the color `#0033a0`?"
+- **Many files:** "Summarize every XD file in this folder."
+
+Some MCP apps also show three ready-made prompts (`xd-to-figma`, `xd-to-code`, `xd-design-review`).
 
 ---
 
@@ -135,7 +154,9 @@ Tips for big files:
 
 What carries over well: frames, rectangles with corner radius, ellipses, lines, vector paths (SVG path data), text with font, size and mixed styles, solid/gradient/image fills, strokes, shadows, opacity, rotation, constraints, and component/instance info.
 
-What doesn't: auto-layout (XD has *stacks*, which are not read yet), repeat grids are exported as their repeated layers with the grid settings attached, prototype interactions, and exact bounds for rotated layers and vector paths (flagged as `boundsApprox`). Treat this as a strong head start, not a pixel-perfect converter, and check the result against the preview image (`xd_get_preview`).
+Also included: XD **stacks** (direction and the gap after each child), scroll settings, and **prototype interactions** attached to the layer they belong to (trigger, destination screen, transition, duration, easing).
+
+What doesn't: padding of stacks, repeat grids are exported as their repeated layers with the grid settings attached, and exact bounds for rotated layers and vector paths (flagged as `boundsApprox`). Treat this as a strong head start, not a pixel-perfect converter, and check the result against the preview image (`xd_get_preview`).
 
 ---
 
@@ -178,7 +199,7 @@ Details and how to report a problem: [SECURITY.md](SECURITY.md).
 ## Known limits
 
 - Built from the XD file format as it appears in current files; XD is closed and undocumented, so unusual files may show gaps. [Open an issue](https://github.com/srayan-uxd/adobe-xd-mcp/issues) (without sharing private designs).
-- Prototype interactions are returned as stored in the file; some files have none.
+- Design audit contrast checks **estimate** the background from the shapes behind the text (and skip text over pictures), so treat them as leads, not verdicts. Positions of rotated layers are approximate.
 - Components are exported with their ids, and repeat grids as their layers plus grid settings; neither is rebuilt as a "live" object.
 - Only drop shadows are mapped for effects; other effects are passed through raw. Gradients are passed through with colors converted to hex (not yet verified against many real files).
 - Read-only. It can't edit or create `.xd` files.
