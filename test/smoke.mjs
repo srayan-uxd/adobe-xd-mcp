@@ -63,4 +63,16 @@ const denied2 = await client.callTool({ name: "xd_list_artboards", arguments: { 
 console.log("outside-root read blocked:", denied2.isError === true);
 const denied3 = await client.callTool({ name: "xd_list_artboards", arguments: { file: path.join(dir, "manifest.json") } });
 console.log("non-.xd blocked:", denied3.isError === true);
+const exp = JSON.parse(await call("xd_export_artboard", { file: xd, artboard: "home" }));
+const rect = exp.node.children?.find((c) => c.type === "rectangle");
+const label = exp.node.children?.find((c) => c.type === "text");
+const okExport =
+  exp.node.type === "frame" &&
+  rect?.fills?.[0]?.color === "#ff0000" &&
+  rect.x === 10 && rect.y === 20 && rect.width === 100 && rect.height === 40 &&
+  label?.text?.characters === "Hello XD" && label.text.font.size === 16;
+console.log("export fidelity ok:", okExport);
+const sub = JSON.parse(await call("xd_export_artboard", { file: xd, artboard: "home", nodeId: "a" }));
+console.log("export subtree ok:", sub.node.id === "a" && sub.node.type === "rectangle");
+if (!okExport) process.exitCode = 1;
 await client.close();

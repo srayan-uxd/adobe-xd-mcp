@@ -76,6 +76,8 @@ for (const p of ["__proto__", "constructor.constructor", "children.constructor"]
 }
 r = await call("xd_read_raw", { file: path.join(dir, "ok.xd"), entry: "../../etc/passwd" });
 check("read_raw cannot read outside archive", r.isError);
+r = await call("xd_export_artboard", { file: path.join(dir, "ok.xd"), artboard: "artboard-1", assetsDir: outside });
+check("export assetsDir outside root rejected", r.isError && /Access denied/.test(txt(r)));
 await client.close();
 
 // roots misconfiguration: filesystem root refused

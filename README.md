@@ -19,6 +19,9 @@ It's a small [MCP](https://modelcontextprotocol.io) server. It runs **on your ow
 | `xd_get_interactions` | Prototype links, if the file has them |
 | `xd_get_preview` | The preview image saved inside the file |
 | `xd_extract_assets` | Saves embedded images to a folder |
+| `xd_export_artboard` | **Full-fidelity export** of a screen (or one layer) as clean JSON: frames, shapes, vector paths, text, fills, gradients, images, strokes, shadows, rotation, constraints, components. Built for rebuilding designs in other tools. See [XD to Figma](#xd-to-figma-and-other-design-tools) |
+| `xd_list_components` / `xd_export_component` | List and export reusable components (symbols) |
+| `xd_get_shared_assets` | Saved color swatches, library colors and text styles |
 | `xd_list_entries` / `xd_read_raw` | Advanced: look inside the raw `.xd` archive |
 
 ---
@@ -115,6 +118,27 @@ Hosted (HTTP) support is not built in yet. Contributions are welcome. Note that 
 
 ---
 
+## XD to Figma (and other design tools)
+
+You can use this server together with the official Figma MCP server (set it up from Figma's help center) in an AI tool that supports several MCP servers (Claude, Cursor, Codex, ...). This server **reads** the XD file; the Figma server **writes** into Figma; the AI connects them.
+
+Try prompts like:
+
+1. *"List the artboards in `C:/Designs/app.xd`."*
+2. *"Export the 'Login' artboard with `xd_export_artboard`, saving images to `C:/Designs/_assets`, and recreate it in my Figma file."*
+3. *"First create Figma components from `xd_list_components`, then use them in the screens."*
+
+Tips for big files:
+- **One screen at a time.** A 60-screen file is a lot of work for an AI, so go screen by screen.
+- **Big screen?** Export a smaller part with `nodeId` (the ids are in the export), or lower `depth`.
+- **Images:** pass `assetsDir` so the exported images are saved as files, and each image fill points to its file by `imageRef`.
+
+What carries over well: frames, rectangles with corner radius, ellipses, lines, vector paths (SVG path data), text with font, size and mixed styles, solid/gradient/image fills, strokes, shadows, opacity, rotation, constraints, and component/instance info.
+
+What doesn't: auto-layout (XD has *stacks*, which are not read yet), repeat grids are exported as their repeated layers with the grid settings attached, prototype interactions, and exact bounds for rotated layers and vector paths (flagged as `boundsApprox`). Treat this as a strong head start, not a pixel-perfect converter, and check the result against the preview image (`xd_get_preview`).
+
+---
+
 ## Alternative install: from source
 
 If `npx` gives you trouble:
@@ -155,7 +179,8 @@ Details and how to report a problem: [SECURITY.md](SECURITY.md).
 
 - Built from the XD file format as it appears in current files; XD is closed and undocumented, so unusual files may show gaps. [Open an issue](https://github.com/srayan-uxd/adobe-xd-mcp/issues) (without sharing private designs).
 - Prototype interactions are returned as stored in the file; some files have none.
-- Components, symbols, repeat grids and effects are shown as their layers, not as high-level objects.
+- Components are exported with their ids, and repeat grids as their layers plus grid settings; neither is rebuilt as a "live" object.
+- Only drop shadows are mapped for effects; other effects are passed through raw. Gradients are passed through with colors converted to hex (not yet verified against many real files).
 - Read-only. It can't edit or create `.xd` files.
 
 ## Develop
