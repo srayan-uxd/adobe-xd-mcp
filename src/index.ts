@@ -41,7 +41,17 @@ const text = (v: unknown, max = MAX_OUT) => {
 const MAX_EXPORT_OUT = 1_500_000; // one export page; pages are cut at 300k chars unless a single layer is bigger
 const fail = (e: unknown) => ({
   isError: true,
-  content: [{ type: "text" as const, text: e instanceof Error ? e.message : String(e) }],
+  content: [
+    {
+      type: "text" as const,
+      text:
+        e instanceof TypeError || e instanceof RangeError
+          ? `The file contains data this server doesn't understand, so it couldn't be processed (${e.message}).`
+          : e instanceof Error
+            ? e.message
+            : String(e),
+    },
+  ],
 });
 const guard =
   <A>(fn: (a: A) => Promise<any>) =>

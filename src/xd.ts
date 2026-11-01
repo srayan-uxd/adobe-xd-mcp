@@ -225,19 +225,17 @@ export function resolveArtboard(doc: XdDoc, query: string): Artboard {
 
 /* ---------- scene graph helpers ---------- */
 
+/** File data is untrusted: only real arrays count as lists. */
+export const arr = (x: unknown): any[] => (Array.isArray(x) ? x : []);
+
 export function childrenOf(node: any): any[] {
   if (!node || typeof node !== "object") return [];
-  return (
-    node.artboard?.children ??
-    node.group?.children ??
-    node.children ??
-    []
-  );
+  return arr(node.artboard?.children ?? node.group?.children ?? node.children);
 }
 
 /** The AGC root holds a list of top-level nodes (the artboard itself, usually). */
 export function rootNodes(agc: any): any[] {
-  return agc?.children ?? [];
+  return arr(agc?.children);
 }
 
 function rgb(c: any): string | undefined {
@@ -254,7 +252,7 @@ function fillOf(style: any): string | undefined {
   if (f.type === "gradient") return `gradient(${f.gradient?.stops?.map((s: any) => rgb(s.color)).join(", ") ?? ""})`;
   if (f.type === "pattern") return "image";
   if (f.type === "none") return undefined;
-  return f.type;
+  return typeof f.type === "string" ? f.type : undefined;
 }
 
 export interface SimpleNode {

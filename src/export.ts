@@ -1,4 +1,4 @@
-import { Artboard, XdDoc, childrenOf, own, readJson, rootNodes } from "./xd.js";
+import { Artboard, XdDoc, arr, childrenOf, own, readJson, rootNodes } from "./xd.js";
 import { pathBox, translatePath } from "./pathgeom.js";
 import { prefetchSources, MAX_SYNC } from "./refs.js";
 
@@ -18,6 +18,8 @@ import { prefetchSources, MAX_SYNC } from "./refs.js";
 
 const RES_PATH = "resources/graphics/graphicContent.agc";
 const MAX_DEPTH_CAP = 64;
+/** A linked component can reference others, so a hostile file could expand into billions of layers. */
+const MAX_EXPORT_NODES = 400_000;
 
 type Json = any;
 
@@ -59,7 +61,7 @@ function gradientOf(p: Json) {
   const g = p.gradient ?? {};
   const res = g.meta?.ux?.gradientResources ?? g;
   const kind = res.type === "radial" ? "radial" : "linear";
-  const stops = (res.stops ?? []).map((s: Json) => {
+  const stops = arr(res.stops).map((s: Json) => {
     const c = colorOf(s.color);
     return { offset: round(s.offset, 1000), color: c?.color, opacity: c?.alpha };
   });
@@ -116,13 +118,13 @@ function strokeOf(s: Json, images: Set<string>): Json | undefined {
 
 function effectsOf(style: Json): Json[] {
   const out: Json[] = [];
-  for (const f of style?.filters ?? []) {
+  for (const f of arr(style?.filters)) {
     if (f?.type === "dropShadow") {
       out.push({
         type: "dropShadow",
         visible: f.visible !== false,
         // XD's blur radius is 2x the Gaussian standard deviation
-        shadows: (f.params?.dropShadows ?? []).map((s: Json) => ({ x: s.dx, y: s.dy, blur: s.r, ...colorOf(s.color) })),
+        shadows: arr(f.params?.dropShadows).map((s: Json) => ({ x: s.dx, y: s.dy, blur: s.r, ...colorOf(s.color) })),
       });
     } else {
       out.push({ type: f?.type ?? "unknown", visible: f?.visible !== false, params: convertColors(f?.params) });
@@ -209,8 +211,8 @@ function normalizeText(n: Json, m: M, ctx: Ctx) {
   const lineXs: number[] = [];
   let firstLineY = 0;
   let gotFirst = false;
-  for (const p of t.paragraphs ?? [])
-    for (const line of p.lines ?? []) {
+  for (const p of arr(t.paragraphs))
+    for (const line of arr(p.lines)) {
       const first = line?.[0];
       if (typeof first?.x === "number") lineXs.push(first.x);
       if (!gotFirst && typeof first?.y === "number") { firstLineY = first.y; gotFirst = true; }
@@ -236,12 +238,12 @@ function normalizeText(n: Json, m: M, ctx: Ctx) {
 
   const runs: Json[] = [];
   const seen = new Set<string>();
-  for (const p of t.paragraphs ?? [])
-    for (const line of p.lines ?? [])
-      for (const r of line ?? []) {
+  for (const p of arr(t.paragraphs))
+    for (const line of arr(p.lines))
+      for (const r of arr(line)) {
         const s = r.style;
         if (!s || typeof r.from !== "number") continue;
-        const deco: string[] = s.textAttributes?.decoration ?? [];
+        const deco: string[] = arr(s.textAttributes?.decoration);
         const run = clean({
           from: r.from,
           to: r.to,
@@ -259,7 +261,7 @@ function normalizeText(n: Json, m: M, ctx: Ctx) {
         }
       }
 
-  const nodeDeco: string[] = attrs.decoration ?? [];
+  const nodeDeco: string[] = arr(attrs.decoration);
   if (font) {
     const key = `${font.postscriptName ?? font.family}|${font.style ?? ""}`;
     const e = ctx.fonts.get(key) ?? { family: font.family, postscriptName: font.postscriptName, style: font.style, sizes: new Set<number>(), uses: 0 };
@@ -307,6 +309,8 @@ interface Ctx {
   fonts: Map<string, FontUse>;
   sources: Map<string, Json>; // syncSourceGuid -> source layer
   syncDepth: number;
+  nodes: number; // layers produced so far (budget against recursive or exploding linked components)
+  chain: Set<string>; // linked sources currently being expanded (cycle guard)
   interactions?: Record<string, Json[]>; // source layer id -> prototype interactions
   artboardNames?: Map<string, string>; // artboard node id -> name
 }
@@ -354,11 +358,13 @@ const STATE_NAME = /hover|pressed|active|disabled|focus|selected|state|error|emp
  * position) turns them into artboard-relative ones. Deeper layers are already parent-relative.
  */
 function convert(n: Json, ctx: Ctx, depth: number, geometry?: Json, offset?: { x: number; y: number }): ExportNode {
+  if (++ctx.nodes > MAX_EXPORT_NODES)
+    throw new Error(`Export exceeds ${MAX_EXPORT_NODES} layers. The file probably has recursive or hugely nested linked components; export a smaller part with nodeId.`);
   // Linked component: the real content lives in another layer, referenced by id.
   if (n.type === "syncRef") {
     const src = ctx.sources.get(n.syncSourceGuid);
-    if (!src || ctx.syncDepth >= MAX_SYNC) {
-      return clean({ id: n.guid ?? n.id, type: "unresolvedRef", name: n.name, sourceId: n.syncSourceGuid, depthLimit: src ? true : undefined });
+    if (!src || ctx.syncDepth >= MAX_SYNC || ctx.chain.has(n.syncSourceGuid)) {
+      return clean({ id: n.guid ?? n.id, type: "unresolvedRef", name: n.name, sourceId: n.syncSourceGuid, depthLimit: src && ctx.syncDepth >= MAX_SYNC ? true : undefined, cyclic: ctx.chain.has(n.syncSourceGuid) || undefined });
     }
     const inst = {
       ...src,
@@ -368,8 +374,14 @@ function convert(n: Json, ctx: Ctx, depth: number, geometry?: Json, offset?: { x
       visible: n.visible ?? src.visible,
     };
     ctx.syncDepth++;
-    const out = convert(inst, ctx, depth, geometry, offset);
-    ctx.syncDepth--;
+    ctx.chain.add(n.syncSourceGuid);
+    let out: ExportNode;
+    try {
+      out = convert(inst, ctx, depth, geometry, offset);
+    } finally {
+      ctx.chain.delete(n.syncSourceGuid);
+      ctx.syncDepth--;
+    }
     out.linkedFrom = n.syncSourceGuid;
     return out;
   }
@@ -405,7 +417,7 @@ function convert(n: Json, ctx: Ctx, depth: number, geometry?: Json, offset?: { x
   if (Array.isArray(wired) && wired.length) out.interactions = wired.map((i: Json) => interactionOut(i, ctx));
 
   // Masks live in the masked group's local space (the same space as its children).
-  const maskShapes: Json[] = ux.clipPathResources?.children ?? [];
+  const maskShapes: Json[] = arr(ux.clipPathResources?.children);
   if (maskShapes.length) {
     const shapes = maskShapes.map((s) => {
       const c = convert(s, ctx, depth + 1);
@@ -462,7 +474,7 @@ function convert(n: Json, ctx: Ctx, depth: number, geometry?: Json, offset?: { x
       }
       if (kind === "compound") {
         out.operation = s.operation; // add | subtract | intersect | exclude
-        out.children = (s.children ?? []).map((c: Json) => convert({ ...c }, ctx, depth + 1));
+        out.children = arr(s.children).map((c: Json) => convert({ ...c }, ctx, depth + 1));
       }
       if (s.fillRule) out.fillRule = s.fillRule;
       break;
@@ -495,7 +507,7 @@ function convert(n: Json, ctx: Ctx, depth: number, geometry?: Json, offset?: { x
   }
 
   // XD component states (hover, pressed, ...) become variants
-  const states: Json[] = ux.states ?? [];
+  const states: Json[] = arr(ux.states);
   if (states.length && depth < ctx.maxDepth) {
     out.variants = states.map((s) => ({ name: s.name, node: convert(s, ctx, depth + 1) }));
   }
@@ -606,6 +618,8 @@ export async function exportWhole(doc: XdDoc, ab: Artboard, opts: { nodeId?: str
       fonts: new Map(),
       sources: await prefetchSources(doc, target),
       syncDepth: 0,
+      nodes: 0,
+      chain: new Set<string>(),
       ...(await protoCtx(doc)),
     };
     const node = convert(target, ctx, 0, target === root ? rootGeo : undefined, offset);
@@ -672,7 +686,7 @@ export async function exportArtboard(
 export async function listComponents(doc: XdDoc) {
   if (!doc.entries.includes(RES_PATH)) return [];
   const res = await readJson(doc, RES_PATH);
-  const symbols: Json[] = res?.resources?.meta?.ux?.symbols ?? [];
+  const symbols: Json[] = arr(res?.resources?.meta?.ux?.symbols);
   const usage = await componentUsage(doc);
   return symbols.map((s) => {
     const id = s.meta?.ux?.symbolId;
@@ -686,7 +700,7 @@ export async function listComponents(doc: XdDoc) {
       usageCount: u?.count ?? 0,
       artboards: u ? [...u.artboards].slice(0, 25) : [],
       artboardCount: u?.artboards.size ?? 0,
-      variantCount: (s.meta?.ux?.states ?? []).length || undefined,
+      variantCount: arr(s.meta?.ux?.states).length || undefined,
       description: describeComponent(s, u?.count ?? 0),
     };
   });
@@ -735,7 +749,7 @@ function componentUsage(doc: XdDoc) {
 
 export async function exportComponent(doc: XdDoc, symbolId: string, opts: { depth?: number; maxChars?: number; page?: number }): Promise<ExportResult> {
   const res = await readJson(doc, RES_PATH);
-  const symbols: Json[] = res?.resources?.meta?.ux?.symbols ?? [];
+  const symbols: Json[] = arr(res?.resources?.meta?.ux?.symbols);
   const s = symbols.find((x) => x.meta?.ux?.symbolId === symbolId || x.id === symbolId || x.name === symbolId);
   if (!s) throw new Error(`Component "${symbolId}" not found. Use xd_list_components.`);
   const depth = Math.min(opts.depth ?? MAX_DEPTH_CAP, MAX_DEPTH_CAP);
@@ -745,6 +759,8 @@ export async function exportComponent(doc: XdDoc, symbolId: string, opts: { dept
     fonts: new Map(),
     sources: await prefetchSources(doc, s),
     syncDepth: 0,
+    nodes: 0,
+    chain: new Set<string>(),
   };
   const node = convert({ ...s, meta: { ux: { ...s.meta?.ux, isMaster: true } } }, ctx, 0);
   delete node.x; // a master has no meaningful canvas position
@@ -757,8 +773,8 @@ export async function exportComponent(doc: XdDoc, symbolId: string, opts: { dept
 export async function sharedAssets(doc: XdDoc) {
   if (!doc.entries.includes(RES_PATH)) return {};
   const ux = (await readJson(doc, RES_PATH))?.resources?.meta?.ux ?? {};
-  const swatches = (ux.colorSwatches ?? []).map((c: Json) => colorOf(c)?.color).filter(Boolean);
-  const lib = ux.documentLibrary?.elements ?? [];
+  const swatches = arr(ux.colorSwatches).map((c: Json) => colorOf(c)?.color).filter(Boolean);
+  const lib = arr(ux.documentLibrary?.elements);
   const colors = lib
     .filter((e: Json) => e.type?.includes("element.color"))
     .map((e: Json) => ({ name: e.name || undefined, ...colorOf(e.representations?.[0]?.content) }));

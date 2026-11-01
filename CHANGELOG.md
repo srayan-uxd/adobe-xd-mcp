@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 (security)
+- **Fixed (high):** linked-component bombs. A file whose components link to themselves, or fan out (30 links per level, 8 levels), made `xd_export_artboard`, `xd_infer_layout` and `xd_render_artboard` run out of memory and crash the server. Self-links are now cut off (`cyclic: true`), and a 400,000-layer budget stops any other expansion with a clear error.
+- **Fixed:** a total cap (200 MB) on image data embedded into one rendered SVG, so a file full of large pictures can't exhaust memory.
+- **Fixed:** every loop over lists read from a file now accepts real arrays only. Malformed files produce a clear "unexpected data" error instead of internal exceptions.
+- **Fixed:** `xd_infer_layout` crashed on frames whose contents all became absolute; non-string text no longer breaks CSV export.
+- Tested with a fuzzer: about 2,000 tool calls on randomly corrupted files, with no crashes, hangs or timeouts. Regression tests added for both bombs.
+
 ## 0.3.0
 Built from lessons learned rebuilding a real 100+ screen file in Figma.
 

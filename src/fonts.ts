@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { Artboard, XdDoc, childrenOf, readJson, rootNodes } from "./xd.js";
+import { Artboard, XdDoc, arr, childrenOf, readJson, rootNodes } from "./xd.js";
 
 /**
  * Which fonts a design uses, whether they are installed on this computer, and how to substitute a missing
@@ -122,7 +122,7 @@ export async function fontReport(doc: XdDoc, artboard?: Artboard) {
     const agc = await readJson(doc, ab.path);
     const walk = (n: Json) => {
       if (n?.style?.font) add(n.style.font, ab.name);
-      for (const p of n?.text?.paragraphs ?? []) for (const l of p.lines ?? []) for (const r of l ?? []) if (r?.style?.fontFamily || r?.style?.font) add(r.style.font ?? { family: r.style.fontFamily, style: r.style.fontStyle, size: r.style.fontSize }, ab.name);
+      for (const p of arr(n?.text?.paragraphs)) for (const l of arr(p.lines)) for (const r of arr(l)) if (r?.style?.fontFamily || r?.style?.font) add(r.style.font ?? { family: r.style.fontFamily, style: r.style.fontStyle, size: r.style.fontSize }, ab.name);
       for (const c of childrenOf(n)) walk(c);
     };
     rootNodes(agc).forEach(walk);

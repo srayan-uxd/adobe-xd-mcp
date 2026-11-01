@@ -341,15 +341,20 @@ export interface SvgResult {
 export async function buildSvg(doc: XdDoc, node: ExportNode, imageRefs: string[]): Promise<SvgResult> {
   const images = new Map<string, Img>();
   const missing: string[] = [];
+  let embedded = 0;
   for (const ref of imageRefs) {
     if (!/^[0-9a-f]{16,64}$/i.test(ref) || !doc.zip.file(`resources/${ref}`)) { missing.push(ref); continue; }
+    let buf: Buffer;
     try {
-      const buf = await readEntry(doc, `resources/${ref}`);
-      const { width, height } = imageSize(buf);
-      images.set(ref, { uri: `data:${mimeOf(buf)};base64,${buf.toString("base64")}`, width, height });
+      buf = await readEntry(doc, `resources/${ref}`);
     } catch {
       missing.push(ref);
+      continue;
     }
+    embedded += buf.length;
+    if (embedded > MAX_EMBED_BYTES) throw new Error(`The images on this screen exceed ${MAX_EMBED_BYTES / 1048576} MB in total; render a smaller part with nodeId.`);
+    const { width, height } = imageSize(buf);
+    images.set(ref, { uri: `data:${mimeOf(buf)};base64,${buf.toString("base64")}`, width, height });
   }
   const c: RCtx = { defs: [], images, usedImages: new Set(), seq: 1, fontFallback: "'Segoe UI', Arial, Helvetica, sans-serif" };
   const body = renderNode(c, node);
@@ -397,6 +402,7 @@ function run(cmd: string, args: string[], timeoutMs: number): Promise<void> {
   });
 }
 
+const MAX_EMBED_BYTES = 200 * 1024 * 1024; // total image data embedded into one SVG
 const MAX_CSS_EDGE = 16384; // px of the unscaled artboard
 const MAX_PNG_BYTES = 12 * 1024 * 1024;
 

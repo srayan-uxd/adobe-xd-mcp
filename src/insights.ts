@@ -1,6 +1,6 @@
 import { readdir, lstat } from "node:fs/promises";
 import path from "node:path";
-import { Artboard, XdDoc, childrenOf, openXd, own, readJson, assertInsideRoots } from "./xd.js";
+import { Artboard, XdDoc, arr, childrenOf, openXd, own, readJson, assertInsideRoots } from "./xd.js";
 import { artboardGeometry, listComponents, sharedAssets } from "./export.js";
 
 type Json = any;
@@ -86,9 +86,9 @@ export async function collectLayers(doc: XdDoc, ab: Artboard): Promise<Layer[]> 
     if (style.fill?.type === "pattern") layer.imageFill = true;
     const sc = solid(style.stroke);
     if (sc) layer.stroke = { hex: sc.hex, width: style.stroke?.width };
-    const shadows = (style.filters ?? [])
+    const shadows = arr(style.filters)
       .filter((x: Json) => x?.type === "dropShadow" && x.visible !== false)
-      .flatMap((x: Json) => x.params?.dropShadows ?? [])
+      .flatMap((x: Json) => arr(x.params?.dropShadows))
       .map((s: Json) => ({ x: s.dx, y: s.dy, blur: s.r, ...(rgbHex(s.color) ?? { hex: "#000000", alpha: 1 }) }));
     if (shadows.length) layer.shadows = shadows;
     out.push(layer);
@@ -118,7 +118,7 @@ export async function collectLayers(doc: XdDoc, ab: Artboard): Promise<Layer[]> 
       return { x: layer.x, y: layer.y, w: layer.w, h: layer.h };
     }
     if (n.type === "text") {
-      const content: string = n.text?.rawText ?? "";
+      const content: string = String(n.text?.rawText ?? "");
       layer.text = content;
       const font = style.font;
       if (font) {
@@ -126,7 +126,7 @@ export async function collectLayers(doc: XdDoc, ab: Artboard): Promise<Layer[]> 
         layer.fontSize = font.size;
       }
       const runs = new Set<string>();
-      for (const p of n.text?.paragraphs ?? []) for (const line of p.lines ?? []) for (const r of line) { const rc = solid(r.style?.fill); if (rc) runs.add(rc.hex); }
+      for (const p of arr(n.text?.paragraphs)) for (const line of arr(p.lines)) for (const r of arr(line)) { const rc = solid(r.style?.fill); if (rc) runs.add(rc.hex); }
       if (runs.size) layer.runFills = [...runs];
       const size = font?.size ?? 14;
       const attrs = style.textAttributes ?? {};
@@ -135,7 +135,7 @@ export async function collectLayers(doc: XdDoc, ab: Artboard): Promise<Layer[]> 
       const lh = layer.lineHeight ?? size * 1.17;
       // XD stores the baseline origin; line x offsets are negative for right/centre aligned point text
       let minX = 0;
-      for (const p of n.text?.paragraphs ?? []) for (const line of p.lines ?? []) if (num(line?.[0]?.x)) minX = Math.min(minX, line[0].x);
+      for (const p of arr(n.text?.paragraphs)) for (const line of arr(p.lines)) if (num(line?.[0]?.x)) minX = Math.min(minX, line[0].x);
       layer.y = layer.y - ((lh - 1.17 * size) / 2 + 0.92 * size);
       layer.x = layer.x + minX;
       const lines = content.split(LINE_BREAKS).length;
@@ -162,7 +162,7 @@ export async function collectLayers(doc: XdDoc, ab: Artboard): Promise<Layer[]> 
     return { x: layer.x, y: layer.y, w: layer.w, h: layer.h };
   };
 
-  for (const root of agc?.children ?? []) {
+  for (const root of arr(agc?.children)) {
     const g = own(geoMap, root.artboard?.ref);
     // top-level layers hold canvas coordinates: shift so (0,0) is the artboard's corner
     const start = { x: -(g?.x ?? 0), y: -(g?.y ?? 0) };
@@ -417,7 +417,7 @@ export async function findLayers(
 /* ---------- copy deck ---------- */
 
 const csvCell = (v: string) => {
-  let s = v.replace(/\r?\n/g, "\n");
+  let s = String(v).replace(/\r?\n/g, "\n");
   if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; // neutralize spreadsheet formula injection
   return `"${s.replace(/"/g, '""')}"`;
 };

@@ -1,4 +1,4 @@
-import { XdDoc, childrenOf, readJson } from "./xd.js";
+import { XdDoc, arr, childrenOf, readJson } from "./xd.js";
 
 /**
  * XD "linked components" appear in artboards as `{type:"syncRef", syncSourceGuid, guid}`.
@@ -17,9 +17,9 @@ interface Loc {
 const indexes = new WeakMap<XdDoc, Promise<Map<string, Loc>>>();
 
 /** Children plus XD component states (hover etc.): source layers can live inside either. */
-const subNodes = (n: Json): Json[] => [...childrenOf(n), ...(n?.meta?.ux?.states ?? [])];
+const subNodes = (n: Json): Json[] => [...childrenOf(n), ...arr(n?.meta?.ux?.states)];
 
-const rootsOf = (agc: Json): Json[] => [...(agc?.children ?? []), ...(agc?.resources?.meta?.ux?.symbols ?? [])];
+const rootsOf = (agc: Json): Json[] => [...arr(agc?.children), ...arr(agc?.resources?.meta?.ux?.symbols)];
 
 async function build(doc: XdDoc): Promise<Map<string, Loc>> {
   const idx = new Map<string, Loc>();
@@ -67,8 +67,8 @@ export async function prefetchSources(doc: XdDoc, root: Json): Promise<Map<strin
     const walk = (n: Json) => {
       if (n?.type === "syncRef" && typeof n.syncSourceGuid === "string" && !found.has(n.syncSourceGuid)) wanted.add(n.syncSourceGuid);
       for (const k of childrenOf(n)) walk(k);
-      for (const s of n?.meta?.ux?.states ?? []) walk(s);
-      for (const m of n?.meta?.ux?.clipPathResources?.children ?? []) walk(m);
+      for (const s of arr(n?.meta?.ux?.states)) walk(s);
+      for (const m of arr(n?.meta?.ux?.clipPathResources?.children)) walk(m);
     };
     frontier.forEach(walk);
     frontier = [];

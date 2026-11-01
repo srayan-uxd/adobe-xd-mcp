@@ -108,6 +108,30 @@ for (const [tool, extra] of [["xd_font_report", {}], ["xd_infer_layout", { artbo
   check(`${tool} refuses files outside the roots`, r.isError && /outside the allowed roots/.test(txt(r)));
 }
 
+// linked components that reference each other must not expand without limit
+{
+  const T = { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 };
+  const comp = (id, kids) => ({ id, type: "group", name: id, transform: T, group: { children: kids } });
+  const refs = (target, n) => Array.from({ length: n }, (_, i) => ({ type: "syncRef", syncSourceGuid: target, guid: `${target}-${i}-${Math.random()}` }));
+  const mk = async (symbols, name) => {
+    const z = new JSZip();
+    z.file("manifest", "{}");
+    z.file("artwork/artboard-1/graphics/graphicContent.agc", JSON.stringify({ children: [{ type: "artboard", id: "1", artboard: { ref: "r", children: [{ type: "syncRef", syncSourceGuid: symbols[0].id, guid: "start" }] } }] }));
+    z.file("resources/graphics/graphicContent.agc", JSON.stringify({ artboards: { r: { x: 0, y: 0, width: 10, height: 10 } }, resources: { meta: { ux: { symbols } } } }));
+    writeFileSync(path.join(dir, name), await z.generateAsync({ type: "nodebuffer" }));
+  };
+  await mk([comp("S", refs("S", 30))], "cycle.xd"); // a component that links to itself
+  const chain = Array.from({ length: 9 }, (_, i) => comp(`C${i}`, i < 8 ? refs(`C${i + 1}`, 30) : [])); // 30^8 copies without any cycle
+  await mk(chain, "fanout.xd");
+  const t0 = Date.now();
+  r = await call("xd_export_artboard", { file: path.join(dir, "cycle.xd"), artboard: "artboard-1" });
+  check("a self-referencing component is cut off instead of recursing", !r.isError && /"cyclic":true/.test(txt(r)));
+  r = await call("xd_export_artboard", { file: path.join(dir, "fanout.xd"), artboard: "artboard-1" });
+  check("exponential component fan-out is stopped by the layer budget (no crash)", r.isError && /exceeds .* layers/.test(txt(r)) && Date.now() - t0 < 30000);
+  r = await call("xd_ping", {});
+  check("server is still alive after the bomb files", !r.isError);
+}
+
 // a gigantic artboard must not be handed to the browser
 {
   const z = new JSZip();

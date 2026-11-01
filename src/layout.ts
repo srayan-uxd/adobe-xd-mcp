@@ -352,7 +352,10 @@ function directionOf(nodes: LNode[], tol: number): "H" | "V" | "mixed" {
 /** Decide direction, wrap sub-rows / sub-columns, and compute spacing, padding and alignment. */
 function structure(frame: LNode, tol: number, grid: number, depth: number, force?: "H" | "V"): void {
   const kids = frame.children;
-  if (kids.length === 0) return;
+  if (kids.length === 0) {
+    frame.layout = { mode: "NONE", itemSpacing: 0, padding: [0, 0, 0, 0], primaryAxisAlign: "MIN", counterAxisAlign: "MIN" };
+    return;
+  }
   let dir = force ?? directionOf(kids, tol);
   if (dir === "H" && kids.length > 1 && !disjointX(kids)) {
     // overlapping x ranges are only a problem if things are really stacked into columns
@@ -617,7 +620,7 @@ function emit(n: LNode, parent: LNode | undefined, grid: number): LayoutOut {
     return out;
   }
 
-  const lay = n.layout!;
+  const lay: Layout = n.layout ?? { mode: "NONE", itemSpacing: 0, padding: [0, 0, 0, 0], primaryAxisAlign: "MIN", counterAxisAlign: "MIN" };
   const out: LayoutOut = {
     type: "frame",
     kind: n.role,
