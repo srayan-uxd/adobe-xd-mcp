@@ -136,6 +136,8 @@ Then use `node` as the command and the full path to `dist/index.js` as the argum
 - **Design to code:** "Build the Home screen as React + Tailwind, using the file's real colors and fonts."
 - **XD to Figma:** "Recreate the Login screen in Figma." ([details](#xd-to-figma-and-other-design-tools))
 - **Design system in minutes:** "Give me this file's colors, type scale and shadows as Tailwind config / CSS variables."
+- **Auto layout:** "Turn this exact copy into auto layout and tell me how far it drifted."
+- **Look at it:** "Render the Home screen so I can compare it with what you built."
 - **Design QA:** "Audit this file for contrast, tiny text and small tap targets."
 - **Copy and translation:** "Export all the text as CSV." Find placeholder text, or every use of a word.
 - **Docs:** "Draw the prototype flow as a diagram and write a screen inventory."
@@ -154,14 +156,18 @@ You don't call these yourself. Your AI picks the right one. This is what's avail
 | `xd_get_artboard` | Layer tree of one screen: position, size, fills, strokes, radius, text, fonts |
 | `xd_extract_text` | All text from one screen, or the whole file |
 | `xd_get_design_tokens` | Colors and fonts used across the file, most-used first |
-| `xd_get_design_system` | The design system **actually used** in the file: colors, type styles and size scale, radii, stroke widths, shadows. As JSON, **CSS variables** or a **Tailwind theme** |
+| `xd_get_design_system` | The design system **actually used** in the file: colors, type styles and size scale, radii, stroke widths, shadows. As JSON, **CSS variables**, a **Tailwind theme**, or **Figma variables** (collections, text styles named by role, effect styles) |
 | `xd_audit_design` | Design QA: text contrast (WCAG), tiny text, small tap targets, placeholder text, near-duplicate colors, too many fonts, default layer names |
 | `xd_find_layers` | Search the whole file by text, layer name, type or color |
 | `xd_export_copy` | All the text as JSON or CSV (a copy deck for translation or review) |
 | `xd_get_flow` | Prototype flow map: taps, hovers, transitions, destinations, plus a Mermaid diagram |
 | `xd_get_interactions` | The raw prototype interactions stored in the file |
-| `xd_export_artboard` | **Full-fidelity export** of a screen (or one layer) as clean JSON: frames, shapes, vector paths, text, fills, gradients, images, strokes, shadows, rotation, constraints, components. Built for rebuilding designs in other tools ([XD to Figma](#xd-to-figma-and-other-design-tools)) |
-| `xd_list_components` / `xd_export_component` | List and export reusable components (symbols) |
+| `xd_export_artboard` | **Full-fidelity export** of a screen (or one layer) as clean JSON: frames, shapes, vector paths, text, fills, gradients, images, strokes, shadows, transforms, constraints, stacks, interactions. Linked components are resolved, big screens are paged, nothing is silently cut. Built for rebuilding designs in other tools ([XD to Figma](#xd-to-figma-and-other-design-tools)) |
+| `xd_render_artboard` | **See the screen**: renders an artboard (or one layer) to a PNG using a local Chrome or Edge. Handy to check a rebuild against the original |
+| `xd_infer_layout` | **Auto-layout proposal** from the exact export: cards, rows and columns, spacing, padding, buttons, fixed illustrations, and a drift report showing how far the result moves things |
+| `xd_font_report` | Fonts used, whether they are installed on this computer, substitutions for missing weights, and a licence note |
+| `xd_list_components` / `xd_export_component` | List reusable components (with usage counts and descriptions) and export one, including its states (hover etc.) as variants |
+| `xd_ping` | Health check: version, allowed folders, browser found, and a built-in self-test |
 | `xd_get_shared_assets` | Saved color swatches, library colors and text styles |
 | `xd_get_preview` | The preview image saved inside the file |
 | `xd_extract_assets` | Saves embedded images to a folder (inside your allowed folders) |
@@ -174,20 +180,33 @@ You don't call these yourself. Your AI picks the right one. This is what's avail
 
 Use this server together with the official Figma MCP server (set that up from Figma's help center) in an AI tool that supports several MCP servers (Claude, Cursor, Codex, ...). This server **reads** the XD file, the Figma server **writes** into Figma, and the AI connects the two.
 
-Try prompts like:
+The best results come from two passes: first an **exact copy by looks**, then a separate **auto-layout rebuild**.
 
-1. *"List the artboards in `C:/Designs/app.xd`."*
-2. *"Export the 'Login' artboard with `xd_export_artboard`, saving images to `C:/Designs/_assets`, and recreate it in my Figma file."*
-3. *"First create Figma components from `xd_list_components`, then use them in the screens."*
+**The recommended workflow** (you can paste this to your AI):
 
-Tips for big files:
-- **One screen at a time.** A 60-screen file is a lot of work for an AI, so go screen by screen.
-- **Big screen?** Export a smaller part with `nodeId` (the ids are in the export), or lower `depth`.
-- **Images:** pass `assetsDir` so the images are saved as files. Each image fill points to its file by `imageRef`.
+1. `xd_list_artboards`, then pick one screen. A 60-screen file is a lot of work, so go screen by screen.
+2. `xd_font_report`: warn about fonts that aren't installed before building anything.
+3. `xd_get_design_system` with format `figma-variables`: create variables, text styles and effect styles first.
+4. `xd_list_components`: create components, then use instances.
+5. `xd_export_artboard` (with `assetsDir` for images): build the **exact copy** in a reference frame.
+6. `xd_render_artboard`: look at the original and compare it with your Figma result.
+7. `xd_infer_layout`: build the **auto-layout version** next to the exact copy, reusing the exact illustrations (every leaf has a `ref` to its exact layer), then compare again.
+8. Use the suggested layer names (`semanticNames` on the export, `suggestedName` in the layout) and add a short description to each component.
 
-**What carries over well:** frames, rectangles with corner radius, ellipses, lines, vector paths (SVG path data), text with font, size and mixed styles, solid/gradient/image fills, strokes, shadows, opacity, rotation, constraints, and component info. Also included: XD **stacks** (direction and the gap after each child), scroll settings, and **prototype interactions** attached to the layer they belong to (trigger, destination screen, transition, duration, easing).
+Example prompts:
 
-**What doesn't:** stack padding, "live" repeat grids (they come as their repeated layers plus the grid settings), and exact bounds for rotated layers and vector paths (flagged `boundsApprox`). Treat the result as a strong head start, not a pixel-perfect converter, and compare it with the preview image (`xd_get_preview`).
+- *"Export the 'Login' artboard with `xd_export_artboard`, saving images to `C:/Designs/_assets`, and recreate it exactly in my Figma file."*
+- *"Now run `xd_infer_layout` and rebuild it with auto layout beside the exact copy. Tell me how far it drifted."*
+
+**What's handled:** linked components (resolved to their real content), masks, text (top-left box, baseline, line breaks, alignment, auto-resize, partly underlined or mixed-style text), the full transform matrix (rotation and flips pivot about the layer's top-left), vector paths in local coordinates, solid, gradient and image fills, strokes, shadows, opacity, constraints, XD **stacks**, scroll settings, component states as variants, and **prototype interactions** on the layer they belong to.
+
+**Big screens are paged.** If the JSON is large, the result comes in pages (`page`, `pageCount`, `hasMore`). Each page holds whole top-level layers, and nothing is ever cut silently (`truncated` is `false` unless *you* ask for a smaller `depth`). To go deeper into one big layer, pass its `nodeId`.
+
+**About `xd_infer_layout`:** it is a heuristic proposal, not magic. It groups layers into cards by containment, finds rows and columns, measures spacing and padding (rounded to a 4px grid), keeps drawings and photos as fixed layers, and marks overlapping decorations as absolute. Where auto layout would move something by more than `maxDrift` pixels (default 5), that layer keeps its exact position instead. Raise `maxDrift` (for example to 12) to get more auto layout with more drift. The `quality` block tells you what you got.
+
+**What doesn't carry over:** stack padding, "live" repeat grids (they come as their repeated layers plus the grid settings), text in rotated layers, and exact widths of single-line text (XD doesn't store them; they are estimated and flagged `widthApprox`). Treat the result as a strong head start and check it with `xd_render_artboard`.
+
+**Fonts:** `xd_font_report` only reads font *names*. This tool never creates, edits or uploads fonts. If a weight is missing, use the substitution table it gives you (for example Medium to Regular) instead of generating one, and check each font's licence before uploading it to another tool.
 
 ---
 
@@ -197,6 +216,7 @@ Tips for big files:
 - **Folder allow-list.** Files outside `XD_MCP_ROOTS` are refused, including sneaky paths (`..`, shortcuts/symlinks). If you don't set it, only the folder the app starts the server in is allowed, which can be a surprising place, so always set it.
 - **Only `.xd` files** can be opened, and network paths (`\\server\share`) are blocked.
 - **Booby-trapped files:** hard limits on file, entry and total size stop "zip bombs" from using up your memory.
+- **Rendering stays on your computer.** `xd_render_artboard` starts your own Chrome or Edge in headless mode with networking switched off, on a temporary file that is deleted afterwards. It needs a browser installed (set `XD_MCP_CHROME` to its path if it isn't found).
 - **Only trusted files.** Text inside a design is passed to your AI, and a malicious file could try to give the AI instructions. Open files from people you trust.
 
 Details and how to report a problem privately: [SECURITY.md](SECURITY.md).
@@ -207,7 +227,8 @@ Details and how to report a problem privately: [SECURITY.md](SECURITY.md).
 
 - XD's file format is closed and undocumented. This is built from files seen in practice, so unusual files may show gaps. [Open an issue](https://github.com/srayan-uxd/adobe-xd-mcp/issues) (without sharing private designs).
 - The audit's contrast check **estimates** the background from the shapes behind the text (and skips text over pictures). Treat results as leads, not verdicts. Positions of rotated layers are approximate.
-- Components are exported with their ids, and repeat grids as their layers plus grid settings. Neither is rebuilt as a "live" object.
+- Components are exported with their ids, usage counts and states, and repeat grids as their layers plus grid settings. Neither is rebuilt as a "live" object.
+- `xd_render_artboard` is an approximation of how XD draws: "inside" and "outside" strokes, blend modes and fonts that aren't installed can look slightly different.
 - Only drop shadows are mapped for effects; other effects are passed through raw. Gradients are passed through with colors converted to hex (not yet checked against many real files).
 - Read-only. It can't edit or create `.xd` files.
 
@@ -217,7 +238,7 @@ Ideas and fixes are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) and the [CHA
 
 ```bash
 npm install
-npm test                              # builds, then runs the smoke, insights and security tests
+npm test                              # builds, then runs the smoke, export, render, health, layout, insights and security tests
 node test/real.mjs path/to/file.xd    # try the server on a real file (read-only)
 ```
 

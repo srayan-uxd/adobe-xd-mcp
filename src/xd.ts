@@ -31,7 +31,7 @@ export interface XdDoc {
 const cache = new Map<string, { mtime: number; doc: XdDoc }>();
 
 /** Allowed roots: XD_MCP_ROOTS (path-delimited) or the server's working directory. */
-function allowedRoots(): string[] {
+export function allowedRoots(): string[] {
   const env = process.env.XD_MCP_ROOTS;
   return (env ? env.split(path.delimiter).filter(Boolean) : [process.cwd()]).map((r) => path.resolve(r)).filter((r) => {
     if (path.parse(r).root === r) throw new Error(`Refusing filesystem root as allowed root: ${r}`);
@@ -138,7 +138,14 @@ export async function openXd(input: string): Promise<XdDoc> {
     return hit.doc;
   }
 
-  const zip = await JSZip.loadAsync(await readFile(file));
+  const doc = await docFromZip(await JSZip.loadAsync(await readFile(file)), file);
+  cache.set(file, { mtime: st.mtimeMs, doc });
+  while (cache.size > MAX_CACHED_DOCS) cache.delete(cache.keys().next().value!);
+  return doc;
+}
+
+/** Validate an already-loaded archive (size limits) and index it. Shared by openXd and the self-test. */
+export async function docFromZip(zip: JSZip, file: string): Promise<XdDoc> {
   const entries = Object.keys(zip.files).filter((n) => !zip.files[n].dir);
   if (entries.length > MAX_ENTRIES) throw new Error("Archive has too many entries.");
   let total = 0;
@@ -161,8 +168,6 @@ export async function openXd(input: string): Promise<XdDoc> {
 
   const doc: XdDoc = { zip, file, manifest, entries, artboards: [], agcCache: new Map() };
   doc.artboards = findArtboards(doc);
-  cache.set(file, { mtime: st.mtimeMs, doc });
-  while (cache.size > MAX_CACHED_DOCS) cache.delete(cache.keys().next().value!);
   return doc;
 }
 

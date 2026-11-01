@@ -45,6 +45,12 @@ check("design system: radius", d.radii[0]?.value === 6);
 const css = (await call("xd_get_design_system", { file: xd, format: "css" })).t;
 check("design system: css output", css.startsWith(":root {") && css.includes("--color-1:"));
 
+const fig = await j("xd_get_design_system", { format: "figma-variables" });
+check("figma-variables: collections for color, radius and typography", ["Color", "Radius", "Typography"].every((n) => fig.collections.some((c) => c.name === n)));
+check("figma-variables: text styles are named by role", fig.textStyles.some((t) => t.name === "Caption/S" && t.fontSize === 9) && fig.textStyles.some((t) => t.name === "Body/L" && t.fontSize === 16));
+check("figma-variables: colors named by use, with scopes", fig.collections[0].variables.every((v) => /^(text|border|surface|brand)\/\d+$/.test(v.name) && v.scopes.length >= 1));
+check("design system keeps family names intact", d.typography.families.every((f) => f === "Inter"));
+
 d = await j("xd_audit_design", {});
 check("audit: low contrast found", d.summary["low-contrast"] >= 1);
 check("audit: small text found", d.summary["small-text"] >= 1);
@@ -71,7 +77,7 @@ const grp = ex.node.children.find((n) => n.id === "grp");
 check("export: interactions attached", btn.interactions?.[0]?.destinationName === "Detail");
 check("export: stack info", grp.stack?.direction === "vertical");
 const det = await j("xd_export_artboard", { artboard: "detail" });
-check("export: top-level coords are artboard-relative", det.node.children[0].x === 5 && det.node.children[0].y === 5);
+check("export: top-level coords are artboard-relative", det.node.children[0].x === 5 && det.node.children[0].text.baselineY === 5);
 
 const ov = JSON.parse((await call("xd_project_overview", { folder: dir })).t);
 check("project overview lists the file", ov.count === 1 && ov.files[0].artboards === 2 && ov.files[0].hasInteractions);

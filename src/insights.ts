@@ -29,6 +29,8 @@ export interface Layer {
   interactive: boolean;
   imageFill?: boolean; // filled with a picture: background colour unknown
   runFills?: string[]; // per-run text colours (override the base fill)
+  lineHeight?: number;
+  charSpacing?: number; // 1/1000 em
 }
 
 const hex2 = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
@@ -40,6 +42,7 @@ const rgbHex = (c: Json): { hex: string; alpha: number } | undefined => {
 const solid = (p: Json) => (p?.type === "solid" ? rgbHex(p.color) : undefined);
 
 const MAX_LAYER_DEPTH = 256;
+const LINE_BREAKS = new RegExp("[" + String.fromCharCode(10, 11, 8232) + "]"); // newline, vertical tab, line separator
 const MAX_LAYERS_PER_ARTBOARD = 100_000;
 const MAX_CONTRAST_PAIRS = 50_000_000; // texts x backgrounds; keeps the audit from hanging on hostile files
 
@@ -126,8 +129,19 @@ export async function collectLayers(doc: XdDoc, ab: Artboard): Promise<Layer[]> 
       for (const p of n.text?.paragraphs ?? []) for (const line of p.lines ?? []) for (const r of line) { const rc = solid(r.style?.fill); if (rc) runs.add(rc.hex); }
       if (runs.size) layer.runFills = [...runs];
       const size = font?.size ?? 14;
-      layer.w = n.text?.frame?.width ?? Math.min(content.length, 60) * size * 0.55; // point text: estimated
-      layer.h = n.text?.frame?.height ?? size * 1.3;
+      const attrs = style.textAttributes ?? {};
+      if (num(attrs.lineHeight)) layer.lineHeight = attrs.lineHeight;
+      if (num(attrs.charSpacing)) layer.charSpacing = attrs.charSpacing;
+      const lh = layer.lineHeight ?? size * 1.17;
+      // XD stores the baseline origin; line x offsets are negative for right/centre aligned point text
+      let minX = 0;
+      for (const p of n.text?.paragraphs ?? []) for (const line of p.lines ?? []) if (num(line?.[0]?.x)) minX = Math.min(minX, line[0].x);
+      layer.y = layer.y - ((lh - 1.17 * size) / 2 + 0.92 * size);
+      layer.x = layer.x + minX;
+      const lines = content.split(LINE_BREAKS).length;
+      const isArea = n.text?.frame?.type === "area";
+      layer.w = isArea ? n.text.frame.width : minX < 0 ? (attrs.paragraphAlign === "center" ? -2 * minX : -minX) : Math.min(content.length, 60) * size * 0.53;
+      layer.h = isArea && num(n.text.frame.height) ? n.text.frame.height : lines * lh;
       return { x: layer.x, y: layer.y, w: layer.w, h: layer.h };
     }
 
@@ -177,7 +191,7 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 const bump = <K>(m: Map<K, number>, k: K, n = 1) => m.set(k, (m.get(k) ?? 0) + n);
 const ranked = <K>(m: Map<K, number>) => [...m.entries()].sort((a, b) => b[1] - a[1]);
 
-export async function designSystem(doc: XdDoc, format: "json" | "css" | "tailwind") {
+export async function designSystem(doc: XdDoc, format: "json" | "css" | "tailwind" | "figma-variables") {
   const layers = await allLayers(doc);
   const colors = new Map<string, { fill: number; text: number; stroke: number }>();
   const addColor = (hex: string | undefined, role: "fill" | "text" | "stroke") => {
@@ -190,11 +204,21 @@ export async function designSystem(doc: XdDoc, format: "json" | "css" | "tailwin
   const radii = new Map<number, number>();
   const strokeWidths = new Map<number, number>();
   const shadows = new Map<string, number>();
+  const textStyles = new Map<string, { family: string; style: string; size: number; lineHeight?: number; charSpacing?: number; uses: number }>();
   for (const l of layers) {
     if (l.type === "artboard") { addColor(l.fill?.hex, "fill"); continue; }
     addColor(l.fill?.hex, l.type === "text" ? "text" : "fill");
     addColor(l.stroke?.hex, "stroke");
-    if (l.font) bump(type, `${String(l.font.family ?? "?").replace(/|/g, " ")}|${String(l.font.style ?? "").replace(/|/g, " ")}|${num(l.font.size) ? l.font.size : 0}`);
+    if (l.font) {
+      const family = String(l.font.family ?? "?").replaceAll("|", " ");
+      const style = String(l.font.style ?? "").replaceAll("|", " ");
+      const size = num(l.font.size) ? l.font.size : 0;
+      bump(type, `${family}|${style}|${size}`);
+      const key = `${family}|${style}|${size}|${l.lineHeight ?? ""}|${l.charSpacing ?? ""}`;
+      const e = textStyles.get(key) ?? { family, style, size, lineHeight: l.lineHeight, charSpacing: l.charSpacing, uses: 0 };
+      e.uses++;
+      textStyles.set(key, e);
+    }
     if (num(l.radius) && l.radius > 0) bump(radii, round2(l.radius));
     if (num(l.stroke?.width) && l.stroke!.width! > 0) bump(strokeWidths, round2(l.stroke!.width!));
     for (const s of l.shadows ?? []) if (num(s.x) && num(s.y) && num(s.blur) && num(s.alpha)) bump(shadows, `${s.x}|${s.y}|${s.blur}|${s.hex}|${Math.round(s.alpha * 100) / 100}`);
@@ -226,6 +250,7 @@ export async function designSystem(doc: XdDoc, format: "json" | "css" | "tailwin
     savedSwatches: (shared as Json).colorSwatches ?? [],
   };
   if (format === "json") return system;
+  if (format === "figma-variables") return figmaVariables(colorList, textStyles, radiusList, shadowList, system.strokeWidths);
 
   const rgba = (hex: string, a: number) => {
     const n = parseInt(hex.slice(1), 16);
@@ -493,4 +518,94 @@ export async function projectOverview(dir: string, maxFiles = 60) {
     }
   }
   return { folder: root, count: files.length, files, truncated: found.length >= maxFiles };
+}
+
+/* ---------- Figma variables / styles ---------- */
+
+function hslOf(hex: string): { h: number; s: number; l: number } {
+  const n = parseInt(hex.slice(1), 16);
+  const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+  return { h: 0, s, l };
+}
+
+const sizeRole = (size: number) =>
+  size < 12 ? "Caption/S" : size < 14 ? "Body/S" : size < 16 ? "Body/M" : size < 18 ? "Body/L" : size < 21 ? "Title/S" : size < 25 ? "Title/M" : size < 33 ? "Title/L" : "Display";
+
+/**
+ * The design system shaped for Figma: variable collections (colors, radii, typography numbers), text styles named by
+ * role, and effect styles, so an agent can create them in a few calls before building screens.
+ */
+function figmaVariables(
+  colorList: { token: string; hex: string; uses: number; fill: number; text: number; stroke: number }[],
+  textStyles: Map<string, { family: string; style: string; size: number; lineHeight?: number; charSpacing?: number; uses: number }>,
+  radiusList: { value: number; uses: number }[],
+  shadowList: { token: string; x: number; y: number; blur: number; color: string; alpha: number; uses: number }[],
+  strokeWidths: { value: number; uses: number }[],
+) {
+  const counters = new Map<string, number>();
+  const colors = colorList.map((c) => {
+    const named = !/^color-\d+$/.test(c.token);
+    const { s } = hslOf(c.hex);
+    const group = c.text >= c.fill && c.text >= c.stroke && c.text > 0 ? "text" : c.stroke > c.fill && c.stroke > c.text ? "border" : s < 0.15 ? "surface" : "brand";
+    const n = (counters.get(group) ?? 0) + 1;
+    counters.set(group, n);
+    return {
+      name: named ? `library/${safeToken(c.token)}` : `${group}/${n}`,
+      resolvedType: "COLOR",
+      values: { Default: c.hex },
+      scopes: group === "text" ? ["TEXT_FILL"] : group === "border" ? ["STROKE_COLOR"] : group === "brand" ? ["ALL_FILLS"] : ["FRAME_FILL", "SHAPE_FILL"],
+      uses: c.uses,
+    };
+  });
+
+  const sizes = [...new Set([...textStyles.values()].map((t) => t.size).filter((v) => v > 0))].sort((a, b) => a - b);
+  const families = [...new Set([...textStyles.values()].map((t) => t.family))];
+  const typography = [
+    ...sizes.map((v) => ({ name: `font-size/${v}`, resolvedType: "FLOAT", values: { Default: v }, scopes: ["FONT_SIZE"] })),
+    ...families.map((f, i) => ({ name: `font-family/${i + 1}`, resolvedType: "STRING", values: { Default: f }, scopes: ["FONT_FAMILY"] })),
+    ...strokeWidths.map((w) => ({ name: `stroke/${w.value}`, resolvedType: "FLOAT", values: { Default: w.value }, scopes: ["STROKE_FLOAT"], uses: w.uses })),
+  ];
+
+  // text styles named by role; duplicates get the weight, then the size
+  const sorted = [...textStyles.values()].filter((t) => t.size > 0).sort((a, b) => b.uses - a.uses);
+  const used = new Set<string>();
+  const styles = sorted.map((t) => {
+    let name = sizeRole(t.size);
+    if (used.has(name)) name = `${name} ${t.style || "Regular"}`;
+    if (used.has(name)) name = `${name} ${t.size}px`;
+    used.add(name);
+    return {
+      name,
+      fontFamily: t.family,
+      fontStyle: t.style || "Regular",
+      fontSize: t.size,
+      lineHeight: t.lineHeight ? { unit: "PIXELS", value: t.lineHeight } : { unit: "AUTO" },
+      letterSpacing: t.charSpacing ? { unit: "PERCENT", value: Math.round(t.charSpacing / 10 * 100) / 100 } : undefined,
+      uses: t.uses,
+    };
+  });
+
+  return {
+    collections: [
+      { name: "Color", modes: ["Default"], variables: colors },
+      { name: "Radius", modes: ["Default"], variables: radiusList.map((r) => ({ name: `radius/${r.value}`, resolvedType: "FLOAT", values: { Default: r.value }, scopes: ["CORNER_RADIUS"], uses: r.uses })) },
+      { name: "Typography", modes: ["Default"], variables: typography },
+    ],
+    textStyles: styles,
+    effectStyles: shadowList.map((s, i) => ({
+      name: `Shadow/${i + 1}`,
+      effects: [{ type: "DROP_SHADOW", color: { hex: s.color, alpha: s.alpha }, offset: { x: s.x, y: s.y }, radius: s.blur, spread: 0 }],
+      uses: s.uses,
+    })),
+    howToApply: [
+      "1. Create the three variable collections with these variables (names with / become groups).",
+      "2. Create the text styles, then the effect styles.",
+      "3. Bind fills, text and corner radii to the variables and styles when building screens.",
+      "Colors are named by how they are used (text, border, surface, brand); rename them to match the brand.",
+    ],
+  };
 }

@@ -9,7 +9,7 @@ cd adobe-xd-mcp
 npm install
 npm test
 ```
-`npm test` builds the project and runs the smoke, insights and security tests on generated `.xd` files.
+`npm test` builds the project and runs the smoke, export, render, health, layout, insights and security tests on generated `.xd` files. The render test skips its screenshot part if no Chrome or Edge is installed.
 
 ## Try it on a real file
 ```bash

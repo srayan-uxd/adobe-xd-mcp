@@ -18,22 +18,27 @@ import {
   own,
   type XdDoc,
 } from "./xd.js";
+import { renderArtboard } from "./render.js";
+import { fontReport } from "./fonts.js";
+import { inferLayout, addSuggestedNames } from "./layout.js";
+import { ping, VERSION } from "./health.js";
 import { designSystem, audit, findLayers, copyDeck, flowMap, projectOverview } from "./insights.js";
 import { exportArtboard, exportComponent, listComponents, sharedAssets, artboardGeometry } from "./export.js";
 
-const server = new McpServer({ name: "adobe-xd-mcp", version: "0.2.1" });
+const server = new McpServer({ name: "adobe-xd-mcp", version: VERSION });
 
 const file = z.string().describe("Absolute path to a .xd file");
 const MAX_OUT = 400_000;
-const text = (v: unknown) => {
+const text = (v: unknown, max = MAX_OUT) => {
   const s = typeof v === "string" ? v : JSON.stringify(v, null, 2);
   return {
     content: [
-      { type: "text" as const, text: s.length > MAX_OUT ? s.slice(0, MAX_OUT) + `
+      { type: "text" as const, text: s.length > max ? s.slice(0, max) + `
 … output truncated (${s.length} chars)` : s },
     ],
   };
 };
+const MAX_EXPORT_OUT = 1_500_000; // one export page; pages are cut at 300k chars unless a single layer is bigger
 const fail = (e: unknown) => ({
   isError: true,
   content: [{ type: "text" as const, text: e instanceof Error ? e.message : String(e) }],
@@ -219,7 +224,9 @@ function sniffExt(b: Buffer): string {
 
 const exportInput = {
   file,
-  depth: z.number().int().min(1).max(64).optional().describe("Max nesting depth. Auto-reduced if the result is too large."),
+  depth: z.number().int().min(1).max(64).optional().describe("Max nesting depth (default: everything). Layers below the limit are marked truncated:true; nothing is ever cut silently."),
+  page: z.number().int().min(0).max(1000).default(0).describe("Page of a large export (see pageCount / hasMore in the result)."),
+  semanticNames: z.boolean().default(false).describe("Add suggestedName to every layer (numeric suffixes stripped, text-based names)."),
   assetsDir: z
     .string()
     .optional()
@@ -230,21 +237,91 @@ server.registerTool(
   "xd_export_artboard",
   {
     description:
-      "Full-fidelity export of one artboard (or a sub-layer via nodeId) as clean JSON for rebuilding the design in another tool such as Figma: frames, rectangles (with corner radius), ellipses, lines, vector paths (SVG path data), boolean shapes, text (font, size, styled runs), fills (solid/gradient/image), strokes, shadows/effects, opacity, rotation, constraints, components, repeat grids and layout grids. Positions are relative to the parent. Images are referenced by imageRef; pass assetsDir to save them. For big screens, export a sub-layer with nodeId.",
+      "Full-fidelity export of one artboard (or a sub-layer via nodeId) as clean JSON for rebuilding the design in another tool such as Figma: frames, rectangles (with corner radius), ellipses, lines, vector paths (SVG path data), boolean shapes, text (font, size, styled runs), fills (solid/gradient/image), strokes, shadows/effects, opacity, rotation, constraints, components, repeat grids and layout grids. Linked components (syncRef) are resolved to their real content. Text is normalised (top-left box, baselineY, line breaks as \n, alignment, autoResize, underline runs). The full transform matrix is given with transformOrigin top-left. Positions are relative to the parent; masks are in the masked group's local space. Images are referenced by imageRef; pass assetsDir to save them. Big screens are split into pages (page / pageCount / hasMore); each page lists whole top-level layers. Use nodeId to drill into one layer.",
     inputSchema: {
       ...exportInput,
       artboard: z.string().describe("Artboard id or name"),
       nodeId: z.string().optional().describe("Export only this layer id (from a previous export)"),
     },
   },
-  guard(async ({ file, artboard, nodeId, depth, assetsDir }) => {
+  guard(async ({ file, artboard, nodeId, depth, assetsDir, page, semanticNames }) => {
     const doc = await openXd(file);
     const ab = resolveArtboard(doc, artboard);
     if (assetsDir) await assertInsideRoots(assetsDir); // fail fast before doing any work
-    const r = await exportArtboard(doc, ab, { nodeId, depth });
+    const r = await exportArtboard(doc, ab, { nodeId, depth, page });
+    if (semanticNames) addSuggestedNames(r.node);
     const images = assetsDir ? await saveImages(doc, r.images, assetsDir) : undefined;
-    return text(JSON.stringify({ artboard: { id: ab.id, name: ab.name }, depthUsed: r.depthUsed, imageRefs: r.images, images, node: r.node }));
+    return text(JSON.stringify({ artboard: { id: ab.id, name: ab.name }, page: r.page, pageCount: r.pageCount, hasMore: r.hasMore, truncated: r.truncated, oversized: r.oversized, syncRefs: r.syncRefs, fonts: r.fonts, imageRefs: r.images, images, node: r.node }), MAX_EXPORT_OUT);
   }),
+);
+
+server.registerTool(
+  "xd_render_artboard",
+  {
+    description:
+      "Render one artboard (or one layer via nodeId) to a PNG so you can SEE the result and verify a rebuild. Renders the full-fidelity export (linked components, masks, gradients, images, shadows, text) as one SVG and screenshots it in a local headless Chrome/Edge. Set XD_MCP_CHROME if the browser isn't found automatically. Nothing is uploaded.",
+    inputSchema: {
+      file,
+      artboard: z.string().describe("Artboard id or name"),
+      nodeId: z.string().optional().describe("Render only this layer id"),
+      scale: z.number().min(0.05).max(4).default(1).describe("Pixel scale; automatically reduced so the longest edge stays within maxEdge"),
+      maxEdge: z.number().int().min(200).max(8192).default(2400).describe("Longest allowed output edge in pixels"),
+    },
+  },
+  guard(async ({ file, artboard, nodeId, scale, maxEdge }) => {
+    const doc = await openXd(file);
+    const ab = resolveArtboard(doc, artboard);
+    const r = await renderArtboard(doc, ab, { nodeId, scale, maxEdge });
+    return {
+      content: [
+        { type: "image" as const, data: r.png.toString("base64"), mimeType: "image/png" },
+        { type: "text" as const, text: JSON.stringify({ artboard: ab.name, width: r.width, height: r.height, scale: r.scale, browser: r.browser, missingImages: r.missingImages }) },
+      ],
+    };
+  }),
+);
+
+server.registerTool(
+  "xd_infer_layout",
+  {
+    description:
+      "Phase 2 of a conversion: from the exact export of a screen, propose frames with AUTO-LAYOUT intent. Clusters layers into cards by containment, detects rows/columns and header-style space-between rows, derives item spacing (median gap) and padding (rounded to a grid), marks equal-width cards and full-width text as FILL, keeps illustrations/photos/masked or rotated groups as fixed leaves, puts overlapping decorations in absoluteChildren, turns centred-label rectangles into buttons, and suggests semantic layer names. Leaves reference the exact layers by ref. Returns a drift report (pixelDeltaEstimate, within3px, within5px, elementsAbsolute, elementsAutoLayout) so you know how far the auto-layout version moves things. A heuristic proposal: rebuild it beside the exact copy and compare with xd_render_artboard.",
+    inputSchema: {
+      file,
+      artboard: z.string().describe("Artboard id or name"),
+      nodeId: z.string().optional().describe("Analyse only this layer"),
+      grid: z.number().min(1).max(16).default(4).describe("Round spacing and padding to this grid (px)"),
+      tolerance: z.number().min(1).max(40).default(8).describe("Pixels within which items count as the same row or column"),
+      maxDrift: z.number().min(0).max(200).default(5).describe("Frames whose auto-layout would move something more than this many px keep exact positions instead (0 = never fall back)"),
+    },
+  },
+  guard(async ({ file, artboard, nodeId, grid, tolerance, maxDrift }) => {
+    const doc = await openXd(file);
+    return text(JSON.stringify(await inferLayout(doc, resolveArtboard(doc, artboard), { nodeId, grid, tolerance, maxDrift })), MAX_EXPORT_OUT);
+  }),
+);
+
+server.registerTool(
+  "xd_font_report",
+  {
+    description:
+      "Fonts used by the file (or one artboard): family, weights/styles, sizes, how often, whether each family is installed on this computer, a substitution table for missing weights (e.g. Medium -> Regular), and a licence note. Run this before rebuilding a design elsewhere and warn the user about missing fonts. Only reads font names; never creates or alters fonts.",
+    inputSchema: { file, artboard: z.string().optional().describe("Artboard id or name; omit for the whole file") },
+  },
+  guard(async ({ file, artboard }) => {
+    const doc = await openXd(file);
+    return text(await fontReport(doc, artboard ? resolveArtboard(doc, artboard) : undefined));
+  }),
+);
+
+server.registerTool(
+  "xd_ping",
+  {
+    description:
+      "Health check: server version, allowed folders, Node and platform, whether a browser for xd_render_artboard was found, and a built-in self-test of the parser and exporter. Pass a file to also check that it opens.",
+    inputSchema: { file: z.string().optional().describe("Optional .xd file to test-open") },
+  },
+  guard(async ({ file }) => text(await ping(file))),
 );
 
 server.registerTool(
@@ -267,7 +344,7 @@ server.registerTool(
     if (assetsDir) await assertInsideRoots(assetsDir);
     const r = await exportComponent(doc, component, { depth });
     const images = assetsDir ? await saveImages(doc, r.images, assetsDir) : undefined;
-    return text(JSON.stringify({ depthUsed: r.depthUsed, imageRefs: r.images, images, node: r.node }));
+    return text(JSON.stringify({ truncated: r.truncated, syncRefs: r.syncRefs, fonts: r.fonts, imageRefs: r.images, images, node: r.node }), MAX_EXPORT_OUT);
   }),
 );
 
@@ -287,8 +364,8 @@ server.registerTool(
   "xd_get_design_system",
   {
     description:
-      "Extract the design system actually used in the file: color palette (ranked, with fill/text/stroke usage), typography styles and size scale, corner radii, stroke widths and shadows. Output as json, css (custom properties) or tailwind (theme.extend).",
-    inputSchema: { file, format: z.enum(["json", "css", "tailwind"]).default("json") },
+      "Extract the design system actually used in the file: color palette (ranked, with fill/text/stroke usage), typography styles and size scale, corner radii, stroke widths and shadows. Output as json, css (custom properties), tailwind (theme.extend) or figma-variables (variable collections, text styles named by role and effect styles, ready to create in Figma).",
+    inputSchema: { file, format: z.enum(["json", "css", "tailwind", "figma-variables"]).default("json") },
   },
   guard(async ({ file, format }) => text(await designSystem(await openXd(file), format ?? "json"))),
 );

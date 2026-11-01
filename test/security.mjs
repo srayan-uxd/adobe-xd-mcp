@@ -102,6 +102,23 @@ check("read_raw cannot read outside archive", r.isError);
   check("CSS output contains only numeric token values", !r.isError && !/evil|body|url/.test(txt(r)) && /^:root \{/.test(txt(r)));
 }
 
+// new tools obey the same folder rules
+for (const [tool, extra] of [["xd_font_report", {}], ["xd_infer_layout", { artboard: "x" }], ["xd_render_artboard", { artboard: "x" }], ["xd_export_artboard", { artboard: "x" }]]) {
+  r = await call(tool, { file: path.join(dir, "..", "x.xd"), ...extra });
+  check(`${tool} refuses files outside the roots`, r.isError && /outside the allowed roots/.test(txt(r)));
+}
+
+// a gigantic artboard must not be handed to the browser
+{
+  const z = new JSZip();
+  z.file("manifest", "{}");
+  z.file("artwork/artboard-1/graphics/graphicContent.agc", JSON.stringify({ children: [{ type: "artboard", id: "1", artboard: { ref: "r", children: [] } }] }));
+  z.file("resources/graphics/graphicContent.agc", JSON.stringify({ artboards: { r: { x: 0, y: 0, width: 40000, height: 40000 } }, resources: { meta: { ux: { symbols: [] } } } }));
+  writeFileSync(path.join(dir, "huge.xd"), await z.generateAsync({ type: "nodebuffer" }));
+  r = await call("xd_render_artboard", { file: path.join(dir, "huge.xd"), artboard: "artboard-1" });
+  check("huge artboards are refused before rendering", r.isError && (/too large/.test(txt(r)) || /No Chrome or Edge/.test(txt(r))));
+}
+
 r = await call("xd_export_artboard", { file: path.join(dir, "ok.xd"), artboard: "artboard-1", assetsDir: outside });
 check("export assetsDir outside root rejected", r.isError && /Access denied/.test(txt(r)));
 await client.close();

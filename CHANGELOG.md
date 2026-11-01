@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.0
+Built from lessons learned rebuilding a real 100+ screen file in Figma.
+
+- **Export fixes** (`xd_export_artboard`, `xd_export_component`):
+  - Linked components (`syncRef`) are resolved to their real content, including ones nested in other components and in component states (up to 8 levels). Unresolvable ones are reported, not left empty.
+  - Masks are positioned correctly (in the masked group's local space).
+  - Text is normalised: top-left `box`, `baselineY`, soft line breaks (vertical tab, line separator) turned into `\n`, `lineHeight`, `alignment`, `autoResize`/`maxWidth`, exact width for right and centre aligned text, and styled runs with underline, colour, size and weight (offsets index into the normalised text).
+  - The full transform matrix is always emitted with `transformOrigin: "top-left"`.
+  - Paths are emitted as `svgPathLocal` (bounding box at 0,0) plus `localBox`; bounds of curves are exact, `boundsApprox` only when a path uses relative, smooth or arc commands.
+  - Big artboards are paged by top-level layer (`page`, `pageCount`, `hasMore`). Depth is never reduced silently; `truncated` is `false` unless you ask for a smaller `depth`.
+  - Hidden layers get a `hiddenReason`; component states are exported as `variants`; every export lists the `fonts` it uses; `semanticNames` adds `suggestedName` to layers.
+- **New tools:**
+  - `xd_render_artboard`: PNG of an artboard or layer, rendered to one SVG and screenshotted in a local headless Chrome or Edge (network disabled, temporary files removed).
+  - `xd_infer_layout`: auto-layout proposal with cards, rows and columns, spacing, padding, buttons, fixed illustrations, absolute decorations, suggested names and a drift report. Frames that would drift more than `maxDrift` px keep exact positions.
+  - `xd_font_report`: fonts used, installed or not, weight substitution table, licence note. Reads names only.
+  - `xd_ping`: version, allowed folders, browser, and a self-test.
+- `xd_list_components` now has usage counts, the artboards that use each component, variant counts and a description.
+- `xd_get_design_system` has a `figma-variables` format.
+- Fixed: font family names in the design system were broken by a bad regular expression; text boxes in the audit and layout now use the real top-left instead of the baseline origin.
+- Render safety: temporary files only in a private temp folder, no network, no scripts, all text escaped.
+
 ## 0.2.1 (security)
 - **Fixed:** decompression bombs with falsified zip header sizes. Entries are now inflated through a hard size cap instead of trusting the headers.
 - **Fixed:** CSS injection in `xd_get_design_system` output. Corner radii, stroke widths, shadows and font sizes must now be real numbers.
