@@ -136,7 +136,7 @@ Then use `node` as the command and the full path to `dist/index.js` as the argum
 - **Design to code:** "Build the Home screen as React + Tailwind, using the file's real colors and fonts."
 - **XD to Figma:** "Recreate the Login screen in Figma." ([details](#xd-to-figma-and-other-design-tools))
 - **Design system in minutes:** "Give me this file's colors, type scale and shadows as Tailwind config / CSS variables."
-- **Auto layout:** "Turn this exact copy into auto layout and tell me how far it drifted."
+- **Auto layout, by default:** "Recreate the Login screen in Figma." The result is one auto-layout frame, not a pile of grouped vectors.
 - **Look at it:** "Render the Home screen so I can compare it with what you built."
 - **Design QA:** "Audit this file for contrast, tiny text and small tap targets."
 - **Copy and translation:** "Export all the text as CSV." Find placeholder text, or every use of a word.
@@ -180,29 +180,29 @@ You don't call these yourself. Your AI picks the right one. This is what's avail
 
 Use this server together with the official Figma MCP server (set that up from Figma's help center) in an AI tool that supports several MCP servers (Claude, Cursor, Codex, ...). This server **reads** the XD file, the Figma server **writes** into Figma, and the AI connects the two.
 
-The best results come from two passes: first an **exact copy by looks**, then a separate **auto-layout rebuild**.
+**The default result is ONE auto-layout Figma frame** that looks as close to the XD original as possible: real, editable text, repeated items as components, illustrations and photos kept as they are, and semantic layer names. Small spacing differences (a few pixels) are fine; looks, hierarchy, colours, fonts and shadows should match. You don't have to ask for auto layout, and you don't get a second "exact copy" version (the exact export is only a temporary source for illustrations). If you really want a pixel-exact, non-auto-layout copy, say so.
 
 **The recommended workflow** (you can paste this to your AI):
 
 1. `xd_list_artboards`, then pick one screen. A 60-screen file is a lot of work, so go screen by screen.
 2. `xd_font_report`: warn about fonts that aren't installed before building anything.
 3. `xd_get_design_system` with format `figma-variables`: create variables, text styles and effect styles first.
-4. `xd_list_components`: create components, then use instances.
-5. `xd_export_artboard` (with `assetsDir` for images): build the **exact copy** in a reference frame.
-6. `xd_render_artboard`: look at the original and compare it with your Figma result.
-7. `xd_infer_layout`: build the **auto-layout version** next to the exact copy, reusing the exact illustrations (every leaf has a `ref` to its exact layer), then compare again.
-8. Use the suggested layer names (`semanticNames` on the export, `suggestedName` in the layout) and add a short description to each component.
+4. `xd_list_components`: create components for repeated items, then use instances.
+5. `xd_render_artboard`: look at the original so you know what you are aiming for.
+6. `xd_export_artboard` (with `assetsDir` for images): the exact layer data, used for text styles and as the source for illustrations and photos.
+7. `xd_infer_layout`: the auto-layout structure (cards, rows, columns, spacing, padding, sizing). Build the page from it; illustrations and photos are cloned from the exact export through the `ref` on each leaf and placed inline or absolutely inside their card.
+8. `xd_render_artboard` again and compare it with your Figma result. Fix anything that looks different, name layers semantically (`suggestedName`), and remove temporary helper layers.
 
 Example prompts:
 
-- *"Export the 'Login' artboard with `xd_export_artboard`, saving images to `C:/Designs/_assets`, and recreate it exactly in my Figma file."*
-- *"Now run `xd_infer_layout` and rebuild it with auto layout beside the exact copy. Tell me how far it drifted."*
+- *"Recreate the 'Login' screen from `C:/Designs/app.xd` in my Figma file. Save images to `C:/Designs/_assets`."*
+- *"Compare it with the original and fix what looks different. List anything you couldn't reproduce."*
 
 **What's handled:** linked components (resolved to their real content), masks, text (top-left box, baseline, line breaks, alignment, auto-resize, partly underlined or mixed-style text), the full transform matrix (rotation and flips pivot about the layer's top-left), vector paths in local coordinates, solid, gradient and image fills, strokes, shadows, opacity, constraints, XD **stacks**, scroll settings, component states as variants, and **prototype interactions** on the layer they belong to.
 
 **Big screens are paged.** If the JSON is large, the result comes in pages (`page`, `pageCount`, `hasMore`). Each page holds whole top-level layers, and nothing is ever cut silently (`truncated` is `false` unless *you* ask for a smaller `depth`). To go deeper into one big layer, pass its `nodeId`.
 
-**About `xd_infer_layout`:** it is a heuristic proposal, not magic. It groups layers into cards by containment, finds rows and columns, measures spacing and padding (rounded to a 4px grid), keeps drawings and photos as fixed layers, and marks overlapping decorations as absolute. Where auto layout would move something by more than `maxDrift` pixels (default 5), that layer keeps its exact position instead. Raise `maxDrift` (for example to 12) to get more auto layout with more drift. The `quality` block tells you what you got.
+**About `xd_infer_layout`:** it is a heuristic proposal, not magic. It groups layers into cards by containment, finds rows and columns, measures spacing and padding (rounded to a 4px grid), keeps drawings and photos as fixed layers, and marks overlapping decorations as absolute. Where auto layout would move something by more than `maxDrift` pixels (default 10), that layer keeps its exact position instead. Lower `maxDrift` (for example to 5) for stricter positions with less auto layout; raise it for more auto layout with more drift. The `quality` block tells you what you got.
 
 **What doesn't carry over:** stack padding, "live" repeat grids (they come as their repeated layers plus the grid settings), text in rotated layers, and exact widths of single-line text (XD doesn't store them; they are estimated and flagged `widthApprox`). Treat the result as a strong head start and check it with `xd_render_artboard`.
 

@@ -670,7 +670,7 @@ export async function inferLayout(doc: XdDoc, ab: Artboard, opts: InferOptions =
   }
   const tree = buildTree(items, page);
   arrange(tree, tol, grid, 0);
-  const driftLimit = opts.maxDrift ?? 5;
+  const driftLimit = opts.maxDrift ?? 10;
   const before = { errors: [] as number[] };
   if (driftLimit > 0) relax(tree, driftLimit, tol, grid);
   void before;

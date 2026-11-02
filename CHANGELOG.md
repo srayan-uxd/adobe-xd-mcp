@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2
+- **Auto layout is now the default** for rebuilding XD screens in Figma. The `xd-to-figma` prompt and the README workflow ask for ONE auto-layout frame (real text, components for repeated items, illustrations kept as they are, semantic layer names) instead of an exact copy plus a second version.
+- `xd_infer_layout`: the default `maxDrift` is now 10 px (was 5), so more of a screen ends up in auto-layout frames. Lower it for stricter positions.
+
 ## 0.3.1 (security)
 - **Fixed (high):** linked-component bombs. A file whose components link to themselves, or fan out (30 links per level, 8 levels), made `xd_export_artboard`, `xd_infer_layout` and `xd_render_artboard` run out of memory and crash the server. Self-links are now cut off (`cyclic: true`), and a 400,000-layer budget stops any other expansion with a clear error.
 - **Fixed:** a total cap (200 MB) on image data embedded into one rendered SVG, so a file full of large pictures can't exhaust memory.

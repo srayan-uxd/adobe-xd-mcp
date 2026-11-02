@@ -302,7 +302,7 @@ server.registerTool(
       nodeId: z.string().optional().describe("Analyse only this layer"),
       grid: z.number().min(1).max(16).default(4).describe("Round spacing and padding to this grid (px)"),
       tolerance: z.number().min(1).max(40).default(8).describe("Pixels within which items count as the same row or column"),
-      maxDrift: z.number().min(0).max(200).default(5).describe("Frames whose auto-layout would move something more than this many px keep exact positions instead (0 = never fall back)"),
+      maxDrift: z.number().min(0).max(200).default(10).describe("Frames whose auto-layout would move something more than this many px keep exact positions instead (0 = never fall back)"),
     },
   },
   guard(async ({ file, artboard, nodeId, grid, tolerance, maxDrift }) => {
@@ -458,7 +458,7 @@ server.registerPrompt(
   { title: "Rebuild an XD screen in Figma", description: "Recreate one artboard in Figma (needs the Figma MCP server too).", argsSchema: promptArgs },
   ({ file, artboard }) =>
     userPrompt(
-      `Rebuild the artboard "${artboard}" from ${file} in Figma. First call xd_export_artboard (use assetsDir for images), then create frames, shapes, text and images in Figma from that JSON, keeping positions, fills, strokes, shadows, corner radii and fonts. Create components for any xd_list_components items you reuse. Compare against xd_get_preview when done and list what could not be reproduced.`,
+      `Recreate the artboard "${artboard}" from ${file} in Figma as ONE auto-layout frame that looks as close to the original as possible. Do not deliver a second "exact copy" version, and do not answer with grouped vectors only. Steps: (1) xd_font_report and warn about fonts that aren't installed; (2) xd_get_design_system with format figma-variables, and create the variables and text/effect styles; (3) xd_list_components, and make components for repeated items; (4) xd_render_artboard to see the original; (5) xd_export_artboard with assetsDir for exact text, fills, shadows and the source of illustrations and photos; (6) xd_infer_layout, and build the frames from its tree with auto layout (direction, spacing, padding, FILL/HUG/FIXED), real editable text layers, and illustrations and photos cloned or imported from the export by their ref, inline or absolutely positioned inside their card; (7) name layers semantically (suggestedName); (8) xd_render_artboard again, compare with your result, fix differences, remove temporary helper layers, and list anything you could not reproduce. Differences of a few pixels in spacing are fine; looks, colours, fonts, shadows and illustrations must match. Only if I explicitly ask for a pixel-exact non-auto-layout copy, skip xd_infer_layout.`,
     ),
 );
 
