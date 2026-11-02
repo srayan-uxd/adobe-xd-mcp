@@ -17,7 +17,7 @@ Try asking: *"List the screens in my XD file"*, *"What colors and fonts does thi
 
 ---
 
-## What can I do with it?
+## What can I do with it? (Examples)
 
 - **Design to code:** "Build the Home screen as React + Tailwind, using the file's real colors and fonts."
 - **XD to Figma:** "Recreate the Login screen in Figma." ([details](#xd-to-figma-and-other-design-tools))
