@@ -11,7 +11,7 @@ It's a small [MCP](https://modelcontextprotocol.io) server. It runs **on your ow
 
 Try asking: *"List the screens in my XD file"*, *"What colors and fonts does this design use?"*, *"Build the Home screen as React + Tailwind."*
 
-**New to this, or on a Mac?** Jump to the [step-by-step guide for Mac (no coding needed)](#mac-step-by-step-no-coding-needed).
+**New to this, or on a Mac?** Jump to the [step-by-step guide for Mac (no coding needed)](#mac-step-by-step).
 
 ---
 
@@ -29,7 +29,7 @@ For example `C:/Designs` (Windows) or `/Users/you/Designs` (Mac/Linux). The serv
 
 ---
 
-## Mac: step-by-step (no coding needed)
+## Mac: step-by-step
 
 This guide is for designers who have never used a terminal. It takes about 15 minutes and uses the **Claude desktop app**. Other AI tools work too (see [Setup for each tool](#setup-for-each-tool)).
 
