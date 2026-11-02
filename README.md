@@ -11,6 +11,8 @@ It's a small [MCP](https://modelcontextprotocol.io) server. It runs **on your ow
 
 Try asking: *"List the screens in my XD file"*, *"What colors and fonts does this design use?"*, *"Build the Home screen as React + Tailwind."*
 
+**New to this, or on a Mac?** Jump to the [step-by-step guide for Mac (no coding needed)](#mac-step-by-step-no-coding-needed).
+
 ---
 
 ## Quick start (3 steps)
@@ -24,6 +26,79 @@ For example `C:/Designs` (Windows) or `/Users/you/Designs` (Mac/Linux). The serv
 
 **Step 3. Restart the tool and ask.** For example:
 *"Use the adobe-xd tool to list the artboards in `C:/Designs/app.xd`."*
+
+---
+
+## Mac: step-by-step (no coding needed)
+
+This guide is for designers who have never used a terminal. It takes about 15 minutes and uses the **Claude desktop app**. Other AI tools work too (see [Setup for each tool](#setup-for-each-tool)).
+
+> **Honest note:** the server is written to run on macOS, Windows and Linux, but so far it has only been tested on Windows. If something doesn't work on your Mac, please [open an issue](https://github.com/srayan-uxd/adobe-xd-mcp/issues) (without attaching private designs). You'd be helping a lot.
+
+**What you need:** a Mac, a Claude account, a Figma account (only if you want to rebuild screens in Figma), and your `.xd` files.
+
+### 1. Install Node.js
+Go to [nodejs.org](https://nodejs.org), download the **LTS** version for macOS, and double-click the installer.
+
+### 2. Install Git
+Open **Terminal** (press `Cmd + Space`, type `Terminal`, press Return). Type this and press Return:
+
+```bash
+git --version
+```
+
+If a pop-up offers to install the developer tools, click **Install** and wait for it to finish.
+
+### 3. Put your XD files in one folder
+For example a folder called `XD` inside `Documents`. The server can only read the folder you give it.
+
+**Get the folder's full path:** in Finder, right-click the folder, hold the `Option` key, and choose **Copy "XD" as Pathname**. It looks like `/Users/yourname/Documents/XD`.
+
+### 4. Install the Claude desktop app
+Download it from [claude.ai](https://claude.ai/download) and sign in.
+
+### 5. Connect the server to Claude
+In Claude, open **Settings → Developer → Edit Config**. A file called `claude_desktop_config.json` opens. Paste this into it (if the file already has content, add the `"adobe-xd"` part inside the existing `mcpServers`), and **replace the folder path with yours**:
+
+```json
+{
+  "mcpServers": {
+    "adobe-xd": {
+      "command": "npx",
+      "args": ["-y", "github:srayan-uxd/adobe-xd-mcp"],
+      "env": { "XD_MCP_ROOTS": "/Users/yourname/Documents/XD" }
+    }
+  }
+}
+```
+
+Use the full path. A `~` shortcut does not work here. Then quit Claude completely (`Cmd + Q`) and open it again. The first start can take a minute while the server downloads.
+
+**If Claude can't find `npx`** (common if you installed Node with Homebrew): in Terminal run `which npx`, then put the full path it prints (for example `/opt/homebrew/bin/npx` or `/usr/local/bin/npx`) in place of `"npx"` above.
+
+**If macOS asks** whether Claude may access your Documents (or Desktop, Downloads) folder, click **Allow**.
+
+### 6. Connect Figma (only for XD to Figma)
+In Claude, open **Settings → Connectors**, add Figma's official connector, and sign in to Figma. The menu names change between Claude versions, so look for "Connectors" or "Integrations".
+
+### 7. Check that it works
+Ask Claude:
+
+> Use the adobe-xd tool to list the screens in /Users/yourname/Documents/XD/myfile.xd.
+
+You can also ask: *"Run xd_ping."* It reports the version, which folders the tool may read, and whether it can render previews.
+
+### 8. Convert a screen to Figma
+Ask Claude:
+
+> Recreate the "Login" screen from that XD file in my Figma file. Keep the fonts, colours and images the same.
+
+It builds the screen with **auto layout** by default, so you don't need to ask for it. Do one screen at a time. If something looks different from the original, ask: *"Compare it with the original and fix what looks different."*
+
+### Good to know on a Mac
+- **Screen previews** (`xd_render_artboard`) need Google Chrome, Microsoft Edge or Chromium in your Applications folder. They are found automatically.
+- **Fonts:** if the fonts used in your XD file aren't installed, the text will change. Ask: *"Run xd_font_report"* to see which are missing.
+- **Privacy:** what the AI reads from your files is shared with your AI provider, like anything you type to it.
 
 ---
 
