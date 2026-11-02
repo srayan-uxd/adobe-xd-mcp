@@ -23,5 +23,16 @@ This is read-only. **Never attach private design files to issues or pull request
 - Add a test in `test/` for new behavior; security-relevant changes also get a case in `test/security.mjs`.
 - Keep the README tool table up to date.
 
+## Releasing (for maintainers)
+
+The README tells people to install a pinned version (`#v0.4.0` style), so every release must update it. `npm test` includes a check (`test/docs.mjs`) that fails if the README, the CHANGELOG and `package.json` disagree.
+
+1. Bump `version` in `package.json`.
+2. Add a section for it to `CHANGELOG.md`.
+3. Change the pinned version in every install example in `README.md` (search for `github:srayan-uxd/adobe-xd-mcp#`).
+4. Run `npm test` and push to `main`; wait for CI to pass.
+5. Tag that commit (`git tag -a vX.Y.Z -m "..."`, then `git push origin vX.Y.Z`) and publish a GitHub Release with the changelog text.
+6. Check the pinned install works: `npx -y github:srayan-uxd/adobe-xd-mcp#vX.Y.Z`.
+
 ## Reporting security problems
 See [SECURITY.md](SECURITY.md). Please don't open public issues for vulnerabilities.

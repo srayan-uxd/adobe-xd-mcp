@@ -175,12 +175,14 @@ In Claude, open **Settings → Developer → Edit Config**. A file called `claud
   "mcpServers": {
     "adobe-xd": {
       "command": "npx",
-      "args": ["-y", "github:srayan-uxd/adobe-xd-mcp"],
+      "args": ["-y", "github:srayan-uxd/adobe-xd-mcp#v0.4.0"],
       "env": { "XD_MCP_ROOTS": "/Users/yourname/Documents/XD" }
     }
   }
 }
 ```
+
+`#v0.4.0` pins this tested version. To update later, change it to the newest version on the [Releases page](https://github.com/srayan-uxd/adobe-xd-mcp/releases).
 
 Use the full path. A `~` shortcut does not work here. Then quit Claude completely (`Cmd + Q`) and open it again. The first start can take a minute while the server downloads.
 
@@ -240,12 +242,14 @@ In Claude, open **Settings → Developer → Edit Config**. A file called `claud
   "mcpServers": {
     "adobe-xd": {
       "command": "npx",
-      "args": ["-y", "github:srayan-uxd/adobe-xd-mcp"],
+      "args": ["-y", "github:srayan-uxd/adobe-xd-mcp#v0.4.0"],
       "env": { "XD_MCP_ROOTS": "C:/Users/yourname/Documents/XD" }
     }
   }
 }
 ```
+
+`#v0.4.0` pins this tested version. To update later, change it to the newest version on the [Releases page](https://github.com/srayan-uxd/adobe-xd-mcp/releases).
 
 Then quit Claude completely and open it again. Closing the window can leave it running in the background, so right-click the Claude icon near the clock (bottom-right of the taskbar) and choose **Quit**. The first start can take a minute while the server downloads.
 
@@ -256,7 +260,7 @@ Then quit Claude completely and open it again. Closing the window can leave it r
   "mcpServers": {
     "adobe-xd": {
       "command": "cmd",
-      "args": ["/c", "npx", "-y", "github:srayan-uxd/adobe-xd-mcp"],
+      "args": ["/c", "npx", "-y", "github:srayan-uxd/adobe-xd-mcp#v0.4.0"],
       "env": { "XD_MCP_ROOTS": "C:/Users/yourname/Documents/XD" }
     }
   }
@@ -292,8 +296,10 @@ It builds the screen with **auto layout** by default, so you don't need to ask f
 The server command is always the same:
 
 ```
-npx -y github:srayan-uxd/adobe-xd-mcp
+npx -y github:srayan-uxd/adobe-xd-mcp#v0.4.0
 ```
+
+The `#v0.4.0` part pins this exact, tested version, so nothing changes under you. To update later, look at the [Releases page](https://github.com/srayan-uxd/adobe-xd-mcp/releases) and change the version number (for example `#v0.4.0` to a newer one), then restart your AI tool.
 
 The one setting you change is `XD_MCP_ROOTS`, your designs folder. To allow several folders, separate them with `;` on Windows or `:` on Mac/Linux. In JSON files use forward slashes (`C:/Designs`), or double every backslash (`C:\\Designs`).
 
@@ -305,18 +311,18 @@ The one setting you change is `XD_MCP_ROOTS`, your designs folder. To allow seve
   "mcpServers": {
     "adobe-xd": {
       "command": "npx",
-      "args": ["-y", "github:srayan-uxd/adobe-xd-mcp"],
+      "args": ["-y", "github:srayan-uxd/adobe-xd-mcp#v0.4.0"],
       "env": { "XD_MCP_ROOTS": "C:/Designs" }
     }
   }
 }
 ```
-> **Windows tip:** if it says `npx` isn't found, use `"command": "cmd"` and `"args": ["/c", "npx", "-y", "github:srayan-uxd/adobe-xd-mcp"]`.
+> **Windows tip:** if it says `npx` isn't found, use `"command": "cmd"` and `"args": ["/c", "npx", "-y", "github:srayan-uxd/adobe-xd-mcp#v0.4.0"]`.
 
 ### Claude Code
 One command:
 ```bash
-claude mcp add adobe-xd -e XD_MCP_ROOTS=/path/to/Designs -- npx -y github:srayan-uxd/adobe-xd-mcp
+claude mcp add adobe-xd -e XD_MCP_ROOTS=/path/to/Designs -- npx -y github:srayan-uxd/adobe-xd-mcp#v0.4.0
 ```
 
 ### Cursor
@@ -330,7 +336,7 @@ Create `.vscode/mcp.json` in your project:
   "servers": {
     "adobe-xd": {
       "command": "npx",
-      "args": ["-y", "github:srayan-uxd/adobe-xd-mcp"],
+      "args": ["-y", "github:srayan-uxd/adobe-xd-mcp#v0.4.0"],
       "env": { "XD_MCP_ROOTS": "C:/Designs" }
     }
   }
@@ -345,7 +351,7 @@ Edit `~/.codex/config.toml`:
 ```toml
 [mcp_servers.adobe-xd]
 command = "npx"
-args = ["-y", "github:srayan-uxd/adobe-xd-mcp"]
+args = ["-y", "github:srayan-uxd/adobe-xd-mcp#v0.4.0"]
 env = { XD_MCP_ROOTS = "C:/Designs" }
 ```
 
@@ -353,7 +359,7 @@ env = { XD_MCP_ROOTS = "C:/Designs" }
 Edit `~/.gemini/settings.json` and add the same `mcpServers` block as Claude Desktop.
 
 ### Cline, Continue, Zed, and other apps
-Almost every MCP app uses the same recipe: *command* `npx`, *args* `-y github:srayan-uxd/adobe-xd-mcp`, and the environment variable `XD_MCP_ROOTS`. Look for "MCP servers" in the app's settings.
+Almost every MCP app uses the same recipe: *command* `npx`, *args* `-y github:srayan-uxd/adobe-xd-mcp#v0.4.0`, and the environment variable `XD_MCP_ROOTS`. Look for "MCP servers" in the app's settings.
 
 ### ChatGPT, Replit, Lovable, and other web/cloud tools
 These run in the cloud, so they **can't reach files on your computer**, and this server is a local one. Your options:
