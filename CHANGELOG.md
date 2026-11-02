@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0
+- **Fixed (important): `xd_infer_layout` could silently drop text layers.** Layers that share an id (common with linked components) overwrote each other, nested absolute children were not reported, and text inside rotated or masked groups disappeared. On a sample of real screens the earlier versions lost roughly one text layer in five; a check on 35 real screens (1,928 text layers) now shows none lost. Fixed leaves that contain text list it in `textLayers`. If you built screens with 0.3.x, re-run `xd_infer_layout`.
+- **Illustrations and icons are grouped better.** Loose, overlapping free-form pieces that were never grouped in XD are merged into one illustration or icon (`parts` lists the pieces). Clusters of only circles, rectangles and lines stay separate so UI such as steppers stays editable. New options: `illustrationMinParts` (default 20), `iconMaxSize` (default 64), `mergeLoose` (default true), `looseMinParts` (default 3); the result has a `grouping` report.
+- **New tool `xd_export_svg`:** export any layers (a group, or the `parts` of a merged drawing) as ONE self-contained SVG, optionally saved to a folder inside the allowed roots (never overwrites).
+
 ## 0.3.2
 - **Auto layout is now the default** for rebuilding XD screens in Figma. The `xd-to-figma` prompt and the README workflow ask for ONE auto-layout frame (real text, components for repeated items, illustrations kept as they are, semantic layer names) instead of an exact copy plus a second version.
 - `xd_infer_layout`: the default `maxDrift` is now 10 px (was 5), so more of a screen ends up in auto-layout frames. Lower it for stricter positions.

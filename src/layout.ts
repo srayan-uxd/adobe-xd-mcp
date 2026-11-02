@@ -28,6 +28,7 @@ interface Item {
   hasShadow: boolean;
   hasStroke: boolean;
   isRect: boolean;
+  parts?: string[]; // loose pieces that were merged into this drawing (layer ids in the exact export)
 }
 
 interface LNode {
@@ -57,6 +58,10 @@ export interface InferOptions {
   maxDrift?: number; // frames drifting more than this many px fall back to exact positions
   grid?: number;
   tolerance?: number; // px for "same row / same column"
+  illustrationMinParts?: number; // a group with more vector parts than this is ONE illustration (default 20)
+  iconMaxSize?: number; // a small group up to this many px is ONE icon (default 64)
+  mergeLoose?: boolean; // merge loose, overlapping vector pieces into one illustration (default true)
+  looseMinParts?: number; // minimum pieces for such a merge (default 3)
 }
 
 const MAX_ITEMS = 4000;
@@ -103,6 +108,13 @@ function hasText(n: ExportNode): boolean {
   if (n.type === "text") return true;
   return (n.children ?? []).some((k: ExportNode) => k.visible !== false && hasText(k));
 }
+/** Text layers inside a node, so they can be recreated even when the node is kept as one fixed leaf. */
+function textsIn(n: ExportNode, acc: { ref?: string; characters: string; fontSize?: number }[] = []) {
+  if (n.visible === false) return acc;
+  if (n.type === "text") acc.push({ ref: n.id, characters: String(n.text?.characters ?? "").slice(0, 120), fontSize: n.text?.font?.size });
+  for (const k of n.children ?? []) textsIn(k, acc);
+  return acc;
+}
 function hasTransform(n: ExportNode): boolean {
   if (!identLin(n.transform)) return true;
   return false;
@@ -121,7 +133,7 @@ function leafBox(n: ExportNode, ox: number, oy: number): Box | undefined {
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
-function unionOf(n: ExportNode, ox: number, oy: number): Box | undefined {
+export function unionOf(n: ExportNode, ox: number, oy: number): Box | undefined {
   const boxes: Box[] = [];
   const walk = (k: ExportNode, px: number, py: number) => {
     if (k.visible === false || k.type === "unresolvedRef") return;
@@ -149,7 +161,12 @@ function isCollection(g: ExportNode, ox: number, oy: number): boolean {
   return boxes.every((b) => area(b) < 0.35 * area(total));
 }
 
-function flatten(root: ExportNode): Item[] {
+interface Grouping {
+  illustrationMinParts: number;
+  iconMaxSize: number;
+}
+
+function flatten(root: ExportNode, cfg: Grouping): Item[] {
   const items: Item[] = [];
   let order = 0;
   const push = (n: ExportNode, kind: Item["kind"], box: Box) => {
@@ -174,13 +191,13 @@ function flatten(root: ExportNode): Item[] {
       if (k.type === "group") {
         const originX = ox + (k.x ?? 0), originY = oy + (k.y ?? 0);
         const small = !hasText(k) && !k.mask ? unionOf(k, ox, oy) : undefined;
-        if (small && Math.max(small.w, small.h) <= 64 && countVectors(k) >= 1 && !hasImage(k) && !hasTransform(k)) {
+        if (small && Math.max(small.w, small.h) <= cfg.iconMaxSize && countVectors(k) >= 1 && !hasImage(k) && !hasTransform(k)) {
           push(k, "icon", small); // a small drawing made of several parts is ONE icon
         } else if (k.mask && !hasText(k)) {
           const mb = k.mask.shapes ? undefined : { x: originX + (k.mask.x ?? 0), y: originY + (k.mask.y ?? 0), w: k.mask.width ?? 0, h: k.mask.height ?? 0 };
           const box = mb && mb.w > 0 && mb.h > 0 ? mb : unionOf(k, ox, oy);
           if (box) push(k, hasImage(k) ? "image" : "illustration", box);
-        } else if (hasTransform(k) || ((countVectors(k) > 20 || hasImage(k)) && !hasText(k) && !isCollection(k, ox, oy))) {
+        } else if (hasTransform(k) || ((countVectors(k) > cfg.illustrationMinParts || hasImage(k)) && !hasText(k) && !isCollection(k, ox, oy))) {
           const box = unionOf(k, ox, oy);
           if (box) push(k, hasImage(k) ? "image" : hasTransform(k) ? "transformed" : "illustration", box);
         } else walk(k, originX, originY);
@@ -192,12 +209,71 @@ function flatten(root: ExportNode): Item[] {
       else if (k.fills?.some((f: Json) => f.type === "image")) push(k, "image", b);
       else if (hasTransform(k)) push(k, "transformed", b);
       else if (k.type === "line" || (k.type === "rectangle" && Math.min(b.w, b.h) <= 2 && Math.max(b.w, b.h) >= 12)) push(k, "divider", b);
-      else if (b.w <= 40 && b.h <= 40 && VECTOR.has(k.type)) push(k, "icon", b);
+      else if (b.w <= Math.min(40, cfg.iconMaxSize) && b.h <= Math.min(40, cfg.iconMaxSize) && VECTOR.has(k.type)) push(k, "icon", b);
       else push(k, "shape", b);
     }
   };
   walk(root, 0, 0);
   return items;
+}
+
+/* ---------- merging loose pieces into drawings ---------- */
+
+const MERGEABLE = new Set<Item["kind"]>(["shape", "icon", "divider", "transformed"]);
+
+/**
+ * XD files often have drawings whose parts were never grouped (or groups that were too small or too large for the
+ * rules above). Parts that overlap or touch each other form one connected cluster; a cluster of enough parts is ONE
+ * illustration (or icon, if small), so it can be imported as a single vector instead of dozens of loose pieces.
+ */
+function mergeLoose(items: Item[], page: Box, cfg: Grouping, minParts: number): { items: Item[]; merged: number; parts: number } {
+  const cand = items.filter((it) => MERGEABLE.has(it.kind) && !hasText(it.node) && !(it.isRect && it.box.w >= 60 && it.box.h >= 30));
+  if (cand.length < minParts || cand.length > 2500) return { items, merged: 0, parts: 0 };
+  const parent = cand.map((_, i) => i);
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  const near = (a: Box, b: Box) => {
+    const ov = inter(a, b);
+    if (ov > 0) return ov / Math.max(1, Math.min(area(a), area(b))) >= 0.03;
+    // touching edges: no gap in one axis and an overlapping range in the other
+    const gapX = Math.max(a.x - right(b), b.x - right(a)), gapY = Math.max(a.y - bottom(b), b.y - bottom(a));
+    return (gapX <= 0.75 && gapY <= 0) || (gapY <= 0.75 && gapX <= 0);
+  };
+  for (let i = 0; i < cand.length; i++)
+    for (let j = i + 1; j < cand.length; j++) if (near(cand[i].box, cand[j].box)) parent[find(i)] = find(j);
+
+  const groups = new Map<number, Item[]>();
+  cand.forEach((it, i) => groups.set(find(i), [...(groups.get(find(i)) ?? []), it]));
+  const drop = new Set<Item>();
+  const added: Item[] = [];
+  let merged = 0, parts = 0;
+  for (const g of groups.values()) {
+    if (g.length < minParts) continue;
+    // Drawings are made of free-form paths. A cluster of only circles, rectangles and lines is usually UI
+    // (a stepper, a progress bar, a chart axis) and should stay editable.
+    const freeform = g.filter((x) => x.node.type === "path" || x.node.type === "boolean").length;
+    if (freeform < Math.max(2, Math.ceil(g.length / 2))) continue;
+    const box = union(g.map((x) => x.box));
+    if (area(box) > 0.6 * Math.max(1, area(page))) continue; // page-sized: that's the background, not a drawing
+    g.forEach((x) => drop.add(x));
+    const first = g.reduce((a, b) => (a.order <= b.order ? a : b));
+    const small = Math.max(box.w, box.h) <= cfg.iconMaxSize;
+    added.push({
+      id: `merged-${first.id}`,
+      name: small ? "Icon" : "Illustration",
+      kind: small ? "icon" : "illustration",
+      node: { id: `merged-${first.id}`, type: "group", name: small ? "Icon" : "Illustration", children: g.map((x) => x.node) } as ExportNode,
+      box,
+      order: first.order,
+      hasFill: false,
+      hasShadow: false,
+      hasStroke: false,
+      isRect: false,
+      parts: g.map((x) => x.id),
+    });
+    merged++;
+    parts += g.length;
+  }
+  return { items: [...items.filter((it) => !drop.has(it)), ...added].sort((a, b) => a.order - b.order), merged, parts };
 }
 
 /* ---------- cards (containment clustering) ---------- */
@@ -216,7 +292,7 @@ function buildTree(items: Item[], page: Box): LNode {
   const root: LNode = { kind: "frame", id: "root", name: "Screen", box: page, order: -1, children: [], absolute: [], role: "screen" };
 
   // Candidate cards: filled/stroked/shadowed rectangles that fully contain something drawn above them.
-  const cards = new Map<string, LNode>();
+  const cards = new Map<Item, LNode>(); // keyed by the item itself: ids can repeat
   const isPageBackground = (it: Item) => it.box.w >= page.w * 0.98 && it.box.h >= page.h * 0.98;
   const used: Item[] = [];
   for (const it of items) {
@@ -229,22 +305,22 @@ function buildTree(items: Item[], page: Box): LNode {
     const holds = items.some((o) => o !== it && o.order > it.order && belongs(it.box, o.box));
     if (!holds) continue;
     used.push(it);
-    cards.set(it.id, { kind: "frame", item: it, id: it.id, name: it.name, box: it.box, order: it.order, children: [], absolute: [] });
+    cards.set(it, { kind: "frame", item: it, id: it.id, name: it.name, box: it.box, order: it.order, children: [], absolute: [] });
   }
 
-  const owner = (box: Box, order: number, selfId: string): LNode => {
+  const owner = (box: Box, order: number, self: Item): LNode => {
     let best: LNode | undefined;
     for (const c of cards.values()) {
-      if (c.id === selfId || c.order >= order || !belongs(c.box, box)) continue;
+      if (c.item === self || c.order >= order || !belongs(c.box, box)) continue;
       if (!best || area(c.box) < area(best.box)) best = c;
     }
     return best ?? root;
   };
 
-  for (const c of cards.values()) owner(c.box, c.order, c.id).children.push(c);
+  for (const c of cards.values()) owner(c.box, c.order, c.item!).children.push(c);
   for (const it of items) {
-    if (cards.has(it.id) || it === root.item) continue;
-    owner(it.box, it.order, it.id).children.push({ kind: "leaf", item: it, id: it.id, name: it.name, box: it.box, order: it.order, children: [], absolute: [] });
+    if (cards.has(it) || it === root.item) continue;
+    owner(it.box, it.order, it).children.push({ kind: "leaf", item: it, id: it.id, name: it.name, box: it.box, order: it.order, children: [], absolute: [] });
   }
   return root;
 }
@@ -568,6 +644,8 @@ export interface LayoutOut {
   suggestedName: string;
   originalName?: string;
   ref?: string;
+  parts?: string[]; // loose pieces merged into this drawing: pass them as ids to xd_export_svg
+  textLayers?: { ref?: string; characters: string; fontSize?: number }[]; // text inside a fixed leaf (rotated or masked group)
   box: { x: number; y: number; width: number; height: number };
   layout?: Json;
   sizing?: { horizontal: string; vertical: string };
@@ -615,7 +693,9 @@ function emit(n: LNode, parent: LNode | undefined, grid: number): LayoutOut {
       out.sizing = { horizontal: inV && parent && Math.abs(n.box.w - (parent.box.w - (parent.layout?.padding[1] ?? 0) - (parent.layout?.padding[3] ?? 0))) <= 2 ? "FILL" : "FIXED", vertical: "FIXED" };
     } else {
       out.sizing = { horizontal: "FIXED", vertical: "FIXED" };
-      out.kind = it.kind === "illustration" || it.kind === "image" || it.kind === "transformed" ? "fixed-leaf" : undefined;
+      out.kind = it.kind === "illustration" || it.kind === "image" || it.kind === "transformed" || it.parts ? "fixed-leaf" : undefined;
+      if (it.parts) out.parts = it.parts.slice(0, 500);
+      if (hasText(node)) out.textLayers = textsIn(node).slice(0, 80);
     }
     return out;
   }
@@ -648,10 +728,14 @@ function emit(n: LNode, parent: LNode | undefined, grid: number): LayoutOut {
   if (n.absolute.length) {
     out.absoluteChildren = n.absolute.map((a) => {
       const e = emit(a, n, grid);
-      return { ref: e.ref, type: e.type, name: e.name, suggestedName: e.suggestedName, x: e.box.x, y: e.box.y, width: e.box.width, height: e.box.height, children: e.children, layout: e.layout };
+      return { ref: e.ref, type: e.type, name: e.name, suggestedName: e.suggestedName, x: e.box.x, y: e.box.y, width: e.box.width, height: e.box.height, children: e.children, absoluteChildren: e.absoluteChildren, layout: e.layout, textLayers: e.textLayers, parts: e.parts };
     });
   }
   return out;
+}
+
+function countKind(n: LayoutOut, type: string): number {
+  return (n.type === type ? 1 : 0) + (n.children ?? []).reduce((a, c) => a + countKind(c, type), 0) + (n.absoluteChildren ?? []).reduce((a: number, c: Json) => a + (c.type === type ? 1 : 0) + (c.children ?? []).reduce((x: number, y: LayoutOut) => x + countKind(y, type), 0), 0);
 }
 
 export async function inferLayout(doc: XdDoc, ab: Artboard, opts: InferOptions = {}) {
@@ -662,7 +746,15 @@ export async function inferLayout(doc: XdDoc, ab: Artboard, opts: InferOptions =
   const rootNode = whole.node;
   // the exported root's children are artboard-relative already; a sub-layer export is shifted to its own origin
   const page: Box = { x: 0, y: 0, w: rootNode.width ?? 0, h: rootNode.height ?? 0 };
-  let items = flatten(rootNode);
+  const cfg: Grouping = { illustrationMinParts: opts.illustrationMinParts ?? 20, iconMaxSize: opts.iconMaxSize ?? 64 };
+  let items = flatten(rootNode, cfg);
+  let grouping = { mergedDrawings: 0, mergedParts: 0 };
+  if (opts.mergeLoose !== false && items.length) {
+    const u = items.length ? union(items.map((i) => i.box)) : { x: 0, y: 0, w: 1, h: 1 };
+    const m = mergeLoose(items, page.w && page.h ? page : u, cfg, Math.max(2, opts.looseMinParts ?? 3));
+    items = m.items;
+    grouping = { mergedDrawings: m.merged, mergedParts: m.parts };
+  }
   if (items.length > MAX_ITEMS) throw new Error(`This screen has ${items.length} layers after grouping; layout inference handles up to ${MAX_ITEMS}. Analyse a smaller part with nodeId.`);
   if (!page.w || !page.h) {
     const u = items.length ? union(items.map((i) => i.box)) : { x: 0, y: 0, w: 1, h: 1 };
@@ -690,6 +782,13 @@ export async function inferLayout(doc: XdDoc, ab: Artboard, opts: InferOptions =
     artboard: { id: ab.id, name: ab.name },
     grid,
     tree: emitted,
+    grouping: {
+      ...grouping,
+      illustrations: countKind(emitted, "illustration"),
+      icons: countKind(emitted, "icon"),
+      images: countKind(emitted, "image"),
+      note: "Groups with more than illustrationMinParts vector parts become one illustration, small groups (iconMaxSize px) one icon, and loose overlapping pieces are merged (mergeLoose, looseMinParts). Merged drawings list their pieces in `parts`; export them as one SVG with xd_export_svg.",
+    },
     quality: {
       pixelDeltaEstimate: r1(mean), // mean position error (px) if the auto-layout version replaced the exact copy
       maxDrift: r1(errs.length ? Math.max(...errs) : 0),

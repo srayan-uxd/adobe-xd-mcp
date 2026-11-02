@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Artboard, XdDoc, readEntry } from "./xd.js";
-import { ExportNode, exportWhole } from "./export.js";
+import { ExportNode, collectImageRefs, exportWhole } from "./export.js";
+import { unionOf } from "./layout.js";
 
 /**
  * Renders an exported artboard to ONE self-contained SVG (nested groups, clip paths, gradients,
@@ -338,7 +339,12 @@ export interface SvgResult {
   missingImages: string[];
 }
 
-export async function buildSvg(doc: XdDoc, node: ExportNode, imageRefs: string[]): Promise<SvgResult> {
+export async function buildSvg(
+  doc: XdDoc,
+  node: ExportNode,
+  imageRefs: string[],
+  viewport?: { x: number; y: number; width: number; height: number },
+): Promise<SvgResult> {
   const images = new Map<string, Img>();
   const missing: string[] = [];
   let embedded = 0;
@@ -358,7 +364,7 @@ export async function buildSvg(doc: XdDoc, node: ExportNode, imageRefs: string[]
   }
   const c: RCtx = { defs: [], images, usedImages: new Set(), seq: 1, fontFallback: "'Segoe UI', Arial, Helvetica, sans-serif" };
   const body = renderNode(c, node);
-  const vp = viewportOf(node);
+  const vp = viewport ?? viewportOf(node);
   const defImages = [...c.usedImages].map((r) => `<image id="img-${esc(r)}" width="${images.get(r)!.width}" height="${images.get(r)!.height}" href="${images.get(r)!.uri}"/>`);
   const w = Math.max(1, Math.ceil(vp.width)), h = Math.max(1, Math.ceil(vp.height));
   const bg = node.type === "frame" ? "" : "";
@@ -459,4 +465,62 @@ export async function renderArtboard(
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+/* ---------- selected layers as one SVG ---------- */
+
+/**
+ * Keep only the selected layers (with everything inside them) and the groups above them, so transforms, masks and
+ * opacity still apply. The wrappers lose their own paint and shadows, so nothing but the selection is drawn.
+ */
+function prune(n: ExportNode, ids: Set<string>, found: Set<string>): ExportNode | undefined {
+  if (n.id && ids.has(n.id)) {
+    found.add(n.id);
+    return n;
+  }
+  const kids = (n.children ?? []).map((k: ExportNode) => prune(k, ids, found)).filter((k: ExportNode | undefined): k is ExportNode => !!k);
+  if (!kids.length) return undefined;
+  const { fills: _f, strokes: _s, effects: _e, ...rest } = n;
+  void _f; void _s; void _e;
+  return { ...rest, children: kids };
+}
+
+/** Bounding box (artboard coordinates) of the selected nodes inside a pruned tree. */
+function selectionBounds(n: ExportNode, ids: Set<string>, ox: number, oy: number, out: { x: number; y: number; w: number; h: number }[]): void {
+  if (n.id && ids.has(n.id)) {
+    const b = unionOf(n, ox, oy);
+    if (b) out.push(b);
+    return;
+  }
+  const isGroup = n.type === "group";
+  for (const k of n.children ?? []) selectionBounds(k, ids, isGroup ? ox + (n.x ?? 0) : ox, isGroup ? oy + (n.y ?? 0) : oy, out);
+}
+
+const MAX_SVG_LAYERS = 500;
+
+export interface LayersSvg extends SvgResult {
+  found: string[];
+  missing: string[];
+}
+
+/** Export the given layers (ids from xd_export_artboard or the `parts` of xd_infer_layout) as ONE self-contained SVG. */
+export async function layersToSvg(doc: XdDoc, ab: Artboard, ids: string[], padding = 2): Promise<LayersSvg> {
+  const wanted = [...new Set(ids.filter((i) => typeof i === "string" && i.length > 0 && i.length <= 200))].slice(0, MAX_SVG_LAYERS);
+  if (!wanted.length) throw new Error("Give at least one layer id.");
+  const whole = await exportWhole(doc, ab, {});
+  const set = new Set(wanted);
+  const found = new Set<string>();
+  const pruned = prune(whole.node, set, found);
+  if (!pruned) throw new Error(`None of the ${wanted.length} layer ids exist in this artboard.`);
+  const boxes: { x: number; y: number; w: number; h: number }[] = [];
+  selectionBounds(pruned, set, 0, 0, boxes);
+  if (!boxes.length) throw new Error("The selected layers have no visible size.");
+  const x0 = Math.min(...boxes.map((b) => b.x)), y0 = Math.min(...boxes.map((b) => b.y));
+  const x1 = Math.max(...boxes.map((b) => b.x + b.w)), y1 = Math.max(...boxes.map((b) => b.y + b.h));
+  const pad = Math.max(0, Math.min(padding, 50));
+  const viewport = { x: x0 - pad, y: y0 - pad, width: x1 - x0 + 2 * pad, height: y1 - y0 + 2 * pad };
+  if (viewport.width > 20000 || viewport.height > 20000) throw new Error("The selection is too large for one SVG; select fewer layers.");
+  const refs = [...collectImageRefs(pruned)];
+  const svg = await buildSvg(doc, pruned, refs, viewport);
+  return { ...svg, found: [...found], missing: wanted.filter((i) => !found.has(i)) };
 }

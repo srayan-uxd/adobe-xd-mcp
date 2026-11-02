@@ -18,7 +18,7 @@ import {
   own,
   type XdDoc,
 } from "./xd.js";
-import { renderArtboard } from "./render.js";
+import { renderArtboard, layersToSvg } from "./render.js";
 import { fontReport } from "./fonts.js";
 import { inferLayout, addSuggestedNames } from "./layout.js";
 import { ping, VERSION } from "./health.js";
@@ -302,12 +302,54 @@ server.registerTool(
       nodeId: z.string().optional().describe("Analyse only this layer"),
       grid: z.number().min(1).max(16).default(4).describe("Round spacing and padding to this grid (px)"),
       tolerance: z.number().min(1).max(40).default(8).describe("Pixels within which items count as the same row or column"),
+      illustrationMinParts: z.number().int().min(2).max(500).default(20).describe("A group with more vector parts than this is kept as ONE illustration"),
+      iconMaxSize: z.number().min(8).max(300).default(64).describe("A small group up to this many px (no text) is kept as ONE icon"),
+      mergeLoose: z.boolean().default(true).describe("Merge loose, overlapping vector pieces that were never grouped in XD into one illustration or icon"),
+      looseMinParts: z.number().int().min(2).max(100).default(3).describe("Minimum number of pieces for that merge"),
       maxDrift: z.number().min(0).max(200).default(10).describe("Frames whose auto-layout would move something more than this many px keep exact positions instead (0 = never fall back)"),
     },
   },
-  guard(async ({ file, artboard, nodeId, grid, tolerance, maxDrift }) => {
+  guard(async ({ file, artboard, nodeId, grid, tolerance, maxDrift, illustrationMinParts, iconMaxSize, mergeLoose, looseMinParts }) => {
     const doc = await openXd(file);
-    return text(JSON.stringify(await inferLayout(doc, resolveArtboard(doc, artboard), { nodeId, grid, tolerance, maxDrift })), MAX_EXPORT_OUT);
+    return text(JSON.stringify(await inferLayout(doc, resolveArtboard(doc, artboard), { nodeId, grid, tolerance, maxDrift, illustrationMinParts, iconMaxSize, mergeLoose, looseMinParts })), MAX_EXPORT_OUT);
+  }),
+);
+
+server.registerTool(
+  "xd_export_svg",
+  {
+    description:
+      "Export one or more layers as ONE self-contained SVG (vectors, gradients, shadows, masks and images embedded), so an illustration, icon or any drawing can be imported into Figma as a single vector instead of dozens of pieces. Pass the layer ids of a group, or the `parts` of a merged drawing from xd_infer_layout. Only the selected layers are drawn (no page background). Use saveTo to write the SVG to a folder inside the allowed roots; otherwise it is returned inline (up to 600k characters).",
+    inputSchema: {
+      file,
+      artboard: z.string().describe("Artboard id or name"),
+      ids: z.array(z.string().min(1).max(200)).min(1).max(500).describe("Layer ids from xd_export_artboard, or the parts list of a merged drawing"),
+      padding: z.number().min(0).max(50).default(2).describe("Extra pixels around the drawing"),
+      saveTo: z.string().optional().describe("Optional absolute folder (inside the allowed roots); the SVG is saved there and its path returned"),
+    },
+  },
+  guard(async ({ file, artboard, ids, padding, saveTo }) => {
+    const doc = await openXd(file);
+    const ab = resolveArtboard(doc, artboard);
+    const dir = saveTo ? await assertInsideRoots(saveTo) : undefined; // fail fast, before rendering
+    const r = await layersToSvg(doc, ab, ids, padding ?? 2);
+    const meta = { width: r.width, height: r.height, layers: r.found.length, missingIds: r.missing, missingImages: r.missingImages, bytes: r.svg.length };
+    if (dir) {
+      await mkdir(dir, { recursive: true });
+      const base = "layers-" + String(r.found[0] ?? "svg").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 40);
+      for (let n = 0; n < 100; n++) {
+        const dest = path.join(dir, `${base}${n ? "-" + n : ""}.svg`);
+        try {
+          await writeFile(dest, r.svg, { encoding: "utf8", flag: "wx" }); // never overwrite, never follow a planted symlink
+          return text(JSON.stringify({ ...meta, savedTo: dest }));
+        } catch (e: any) {
+          if (e?.code !== "EEXIST") throw e;
+        }
+      }
+      throw new Error("Too many files with this name already exist in that folder.");
+    }
+    if (r.svg.length > 600_000) throw new Error(`The SVG is ${r.svg.length} characters (images are embedded). Use saveTo to write it to a folder instead.`);
+    return text(JSON.stringify({ ...meta, svg: r.svg }), MAX_EXPORT_OUT);
   }),
 );
 

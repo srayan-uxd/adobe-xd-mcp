@@ -52,7 +52,8 @@ You don't call these yourself. Your AI picks the right one. This is what's avail
 | `xd_get_interactions` | The raw prototype interactions stored in the file |
 | `xd_export_artboard` | **Full-fidelity export** of a screen (or one layer) as clean JSON: frames, shapes, vector paths, text, fills, gradients, images, strokes, shadows, transforms, constraints, stacks, interactions. Linked components are resolved, big screens are paged, nothing is silently cut. Built for rebuilding designs in other tools ([XD to Figma](#xd-to-figma-and-other-design-tools)) |
 | `xd_render_artboard` | **See the screen**: renders an artboard (or one layer) to a PNG using a local Chrome or Edge. Handy to check a rebuild against the original |
-| `xd_infer_layout` | **Auto-layout proposal** from the exact export: cards, rows and columns, spacing, padding, buttons, fixed illustrations, and a drift report showing how far the result moves things |
+| `xd_infer_layout` | **Auto-layout proposal** from the exact export: cards, rows and columns, spacing, padding, buttons, **illustrations and icons kept as single units** (including loose pieces that were never grouped in XD), and a drift report showing how far the result moves things |
+| `xd_export_svg` | Exports any layers (a group, or the pieces of a drawing) as **ONE self-contained SVG**, so an illustration or icon can be imported into Figma as a single vector |
 | `xd_font_report` | Fonts used, whether they are installed on this computer, substitutions for missing weights, and a licence note |
 | `xd_list_components` / `xd_export_component` | List reusable components (with usage counts and descriptions) and export one, including its states (hover etc.) as variants |
 | `xd_ping` | Health check: version, allowed folders, browser found, and a built-in self-test |
@@ -78,7 +79,7 @@ Use this server together with the official Figma MCP server (set that up from Fi
 4. `xd_list_components`: create components for repeated items, then use instances.
 5. `xd_render_artboard`: look at the original so you know what you are aiming for.
 6. `xd_export_artboard` (with `assetsDir` for images): the exact layer data, used for text styles and as the source for illustrations and photos.
-7. `xd_infer_layout`: the auto-layout structure (cards, rows, columns, spacing, padding, sizing). Build the page from it; illustrations and photos are cloned from the exact export through the `ref` on each leaf and placed inline or absolutely inside their card.
+7. `xd_infer_layout`: the auto-layout structure (cards, rows, columns, spacing, padding, sizing). Build the page from it. Illustrations and icons arrive as single fixed leaves: import each one with `xd_export_svg` (pass the leaf's `ref`, or its `parts` for a merged drawing) and place it inline or absolutely inside its card. Photos are cloned from the exact export through the `ref`.
 8. `xd_render_artboard` again and compare it with your Figma result. Fix anything that looks different, name layers semantically (`suggestedName`), and remove temporary helper layers.
 
 Example prompts:
@@ -91,6 +92,8 @@ Example prompts:
 **Big screens are paged.** If the JSON is large, the result comes in pages (`page`, `pageCount`, `hasMore`). Each page holds whole top-level layers, and nothing is ever cut silently (`truncated` is `false` unless *you* ask for a smaller `depth`). To go deeper into one big layer, pass its `nodeId`.
 
 **About `xd_infer_layout`:** it is a heuristic proposal, not magic. It groups layers into cards by containment, finds rows and columns, measures spacing and padding (rounded to a 4px grid), keeps drawings and photos as fixed layers, and marks overlapping decorations as absolute. Where auto layout would move something by more than `maxDrift` pixels (default 10), that layer keeps its exact position instead. Lower `maxDrift` (for example to 5) for stricter positions with less auto layout; raise it for more auto layout with more drift. The `quality` block tells you what you got.
+
+**How illustrations and icons are grouped:** a group with more than 20 vector parts (and no text) is kept as ONE illustration, and a small group (up to 64 px, no text) as ONE icon. Groups with photos, masks or rotations stay as single fixed units, and any text inside them is listed on the leaf (`textLayers`), so nothing is lost. Many XD files also contain drawings whose parts were never grouped: overlapping or touching free-form paths are merged into one illustration, listed in `parts`. Clusters made only of circles, rectangles and lines (a stepper, a progress bar) are left alone so they stay editable. The thresholds are adjustable (`illustrationMinParts`, `iconMaxSize`, `mergeLoose`, `looseMinParts`); the `grouping` block in the result says what was merged. This is a heuristic: check the result with `xd_render_artboard`.
 
 **What doesn't carry over:** stack padding, "live" repeat grids (they come as their repeated layers plus the grid settings), text in rotated layers, and exact widths of single-line text (XD doesn't store them; they are estimated and flagged `widthApprox`). Treat the result as a strong head start and check it with `xd_render_artboard`.
 
